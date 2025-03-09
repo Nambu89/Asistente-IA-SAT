@@ -1,0 +1,181 @@
+/* Estilos personalizados adicionales a Tailwind */
+
+/* Scrollbar personalizado */
+#chat-messages::-webkit-scrollbar {
+    width: 8px;
+}
+
+#chat-messages::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+}
+
+#chat-messages::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 4px;
+}
+
+#chat-messages::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
+
+/* Animaciones de mensajes */
+.message-appear {
+    animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Estilo para mensajes del usuario */
+.user-message {
+    background-color: #E3F2FD;
+    margin-left: 20%;
+    border-radius: 15px 15px 0 15px;
+}
+
+/* Estilo para mensajes del bot */
+.bot-message {
+    background-color: #F5F5F5;
+    margin-right: 20%;
+    border-radius: 15px 15px 15px 0;
+}
+
+/* Estilo para mensajes de error */
+.error-message {
+    background-color: #FFEBEE;
+    border-left: 4px solid #EF5350;
+}
+
+/* Estilo para el estado de carga */
+.loading-indicator {
+    display: inline-block;
+    position: relative;
+    width: 40px;
+    height: 40px;
+}
+
+.loading-indicator:after {
+    content: " ";
+    display: block;
+    width: 24px;
+    height: 24px;
+    margin: 8px;
+    border-radius: 50%;
+    border: 3px solid #1976D2;
+    border-color: #1976D2 transparent #1976D2 transparent;
+    animation: loading-indicator 1.2s linear infinite;
+}
+
+@keyframes loading-indicator {
+    0% {
+        transform: rotate(0deg);
+    }
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+.chat-container {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.bot-message {
+    background-color: #f8f9fa;
+    margin-right: 20%;
+    border-radius: 15px 15px 15px 0;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+
+.user-message {
+    background-color: #e3f2fd;
+    margin-left: 20%;
+    border-radius: 15px 15px 0 15px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+
+/* Estilos para el formato de código */
+.bot-message pre {
+    background-color: #f1f1f1;
+    padding: 1rem;
+    border-radius: 0.5rem;
+    overflow-x: auto;
+    margin: 0.5rem 0;
+}
+
+/* Estilos para listas */
+.bot-message ul, .bot-message ol {
+    margin-left: 1.5rem;
+    margin-top: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.bot-message li {
+    margin-bottom: 0.25rem;
+}
+
+/* Estilos para el formato del texto */
+.bot-message strong {
+    font-weight: 600;
+    color: #1a55b3;
+}
+
+.bot-message em {
+    font-style: italic;
+    color: #2c5282;
+}
+
+/* Estilos para listas */
+.bot-message ul, .bot-message ol {
+    margin-left: 1.5rem;
+    margin-top: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.bot-message li {
+    margin-bottom: 0.5rem;
+    line-height: 1.5;
+}
+
+/* Estilos para los pasos numerados */
+.bot-message ol {
+    counter-reset: step-counter;
+    list-style-type: none;
+}
+
+.bot-message ol li {
+    counter-increment: step-counter;
+    position: relative;
+    padding-left: 2.5rem;
+}
+
+.bot-message ol li::before {
+    content: counter(step-counter);
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 1.5rem;
+    height: 1.5rem;
+    background-color: #1a55b3;
+    color: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.875rem;
+    font-weight: 600;
+}

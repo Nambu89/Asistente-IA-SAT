@@ -1,0 +1,24 @@
+{
+  "name": "svaniano",
+  "version": "1.0.0",
+  "description": "Asistente técnico especializado en productos del Grupo SVAN",
+  "main": "tailwind.config.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build:css": "tailwindcss -i ./static/css/styles.css -o ./static/css/styles.min.css --minify",
+    "watch:css": "tailwindcss -i ./static/css/styles.css -o ./static/css/styles.min.css --watch",
+    "dev": "concurrently \"npm run watch:css\" \"uvicorn app.main:app --reload\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "autoprefixer": "^10.4.17",
+    "concurrently": "^8.2.2",
+    "postcss": "^8.4.35",
+    "tailwindcss": "^3.4.1"
+  }
+}
