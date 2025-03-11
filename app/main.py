@@ -63,11 +63,11 @@ app.add_middleware(
         "localhost",
         "127.0.0.1",
         "svania.azurewebsites.net",  # Dominio de Azure
-        "b2b.svanelectro.com",         # Dominio del B2B
+        "b2b.gruposvan.com",         # Dominio del B2B
         "*"                            # Permitir todos en desarrollo
     ] if not os.getenv("PRODUCTION", False) else [
-        "svania.azurewebsites.net",  # Solo dominios específicos en producción
-        "b2b.svanelectro.com"
+        "svanartificialintelligence.azurewebsites.net",  # Solo dominios específicos en producción
+        "b2b.gruposvan.com"
     ]
 )
 
@@ -77,10 +77,10 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:8000",
-        "https://b2b.svanelectro.com",
+        "https://b2b.gruposvan.com",
         "https://svania.azurewebsites.net"
     ] if not os.getenv("PRODUCTION", False) else [
-        "https://b2b.svanelectro.com",
+        "https://b2b.gruposvan.com",
         "https://svania.azurewebsites.net"
     ],
     allow_credentials=True,
@@ -170,18 +170,20 @@ async def general_exception_handler(request: Request, exc: Exception):
     )
 
 if __name__ == "__main__":
-    # Determinar el puerto
-    port = int(os.getenv("PORT", 8000))
+    # Determinar el puerto - Azure App Service usa la variable WEBSITES_PORT
+    port = int(os.getenv("WEBSITES_PORT", os.getenv("PORT", 8000)))
     
     # Configuración de uvicorn para producción
+    workers = int(os.getenv("WEB_CONCURRENCY", "4")) if os.getenv("PRODUCTION") else 1
+    
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
         port=port,
-        workers=4 if os.getenv("PRODUCTION") else 1,  # Múltiples workers solo en producción
+        workers=workers,
         proxy_headers=True,
         forwarded_allow_ips="*",
         log_level="info" if os.getenv("PRODUCTION") else "debug",
         access_log=True,
-        reload=not os.getenv("PRODUCTION", False)  # Auto-recarga solo en desarrollo
+        reload=not os.getenv("PRODUCTION", False)
     )

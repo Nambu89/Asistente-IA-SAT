@@ -1,0 +1,6 @@
+version: '3'
+services:
+  web:
+    image: svaniaregistry.azurecr.io/svania:v1.0
+    ports:
+      - "8000:8000"
