@@ -1,0 +1,44 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env
+pip-log.txt
+pip-delete-this-directory.txt
+.tox
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+
+# Virtual environment
+venv
+.env
+.venv
+ENV
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Archivos de proyecto
+Manuales/
+uploads/
+*.pdf
+*.doc
+*.docx
+
+# Docker
+Dockerfile
+.dockerignore 

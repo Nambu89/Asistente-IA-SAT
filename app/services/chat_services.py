@@ -1,119 +1,173 @@
-from openai import OpenAI
-from app.core.settings import Settings
-from app.services.pdf_services import PDFService
-from typing import Dict, Optional
+import logging
+from typing import Optional, List, Tuple
+from pathlib import Path
 import re
+from fastapi import HTTPException
+from app.core.settings import Settings
+from app.services.azure_search_service import AzureSearchService
+from openai import OpenAI
+
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class ChatService:
     def __init__(self):
         self.settings = Settings()
         self.client = OpenAI(api_key=self.settings.OPENAI_API_KEY)
-        self.pdf_service = PDFService()
-        self.conversation_context = {
-            'current_model': None,
-            'current_error': None,
-            'history': []
-        }
+        self.search_service = AzureSearchService()
+        self.current_model = None
+        self.conversation_history = []
 
-    def _extract_model_number(self, message: str) -> Optional[str]:
+    async def get_chat_response(self, message: str) -> str:
         """
-        Extrae el número de modelo del mensaje usando varios patrones de búsqueda.
-        Busca modelos que empiecen con prefijos conocidos como SC, SL, AI, etc.
+        Procesa un mensaje del usuario y retorna una respuesta
         """
-        message = message.upper()
-        model_prefixes = ['SC', 'SL', 'AI', 'WL']
-        
-        # Patrones comunes en mensajes
-        patterns = [
-            r'(?:MODELO|PLACA|LAVADORA)\s+([A-Z0-9]+)',  # Busca "modelo XXX"
-            r'([A-Z]{2}\d{4,}[A-Z0-9]*)'  # Busca patrones tipo SC1855...
-        ]
-        
-        # Buscar usando patrones
-        for pattern in patterns:
-            matches = re.findall(pattern, message)
-            for match in matches:
-                if any(match.startswith(prefix) for prefix in model_prefixes):
-                    return match
-        
-        # Búsqueda palabra por palabra como respaldo
-        words = message.split()
-        for word in words:
-            if any(word.startswith(prefix) for prefix in model_prefixes):
-                return word
-                
-        return None
-
-    def _extract_error_code(self, message: str) -> Optional[str]:
-        """
-        Extrae códigos de error del mensaje.
-        Busca patrones como 'Error X', 'E0X', 'F0X', etc.
-        """
-        patterns = [
-            r'([Ee]rror|[Ee]|[Ff])\s*(\d+)',
-            r'([Ee][Rr][Rr][Oo][Rr])\s*([0-9]+)'
-        ]
-        
-        for pattern in patterns:
-            error_match = re.search(pattern, message)
-            if error_match:
-                return error_match.group(2)
-        return None
-
-    async def get_chat_response(self, message: str) -> Dict[str, str]:
         try:
-            # Extraer información del mensaje
-            new_model = self._extract_model_number(message)
-            error_code = self._extract_error_code(message)
+            # Detectar modelo en el mensaje
+            model = self._extract_model_from_message(message)
+            if model:
+                self.current_model = model
             
-            # Actualizar contexto
-            if new_model:
-                self.conversation_context['current_model'] = new_model
-            if error_code:
-                self.conversation_context['current_error'] = error_code
+            # Si tenemos un modelo, buscar en el manual
+            if self.current_model:
+                manual = await self.search_service.get_manual_by_model(self.current_model)
+                if manual and manual.get('content'):
+                    brand, product_type = self._get_brand_and_type(self.current_model)
+                    
+                    # Construir el contexto con la información del manual
+                    context = f"""Modelo: {self.current_model}
+Marca: {brand if brand else 'Desconocida'}
+Tipo: {product_type if product_type else 'electrodoméstico'}
+
+Manual técnico:
+{manual['content']}"""
+                else:
+                    context = f"No se encontró el manual para el modelo {self.current_model}"
+            else:
+                context = "No se ha especificado un modelo válido"
+
+            # Mantener historial de conversación
+            self.conversation_history.append({"role": "user", "content": message})
             
-            # Construir prompt del sistema
-            system_message = """
-            Eres un asistente técnico especializado del Grupo SVAN. Sigue estas pautas:
-            1. Da respuestas directas y específicas
-            2. Si ya tienes el modelo identificado, no preguntes por él
-            3. Usa la información del manual cuando esté disponible
-            4. Si necesitas más detalles, pregunta específicamente qué información falta
-            5. Mantén un tono profesional y claro
-            """
-            
-            if self.conversation_context['current_model']:
-                system_message += f"\nModelo actual: {self.conversation_context['current_model']}"
-            
+            # Preparar mensajes para OpenAI
             messages = [
-                {"role": "system", "content": system_message}
+                {"role": "system", "content": self.settings.SYSTEM_PROMPT},
+                {"role": "system", "content": context}
             ]
-            
-            # Obtener información del manual
-            context = await self.pdf_service.get_relevant_context(message, self.conversation_context['current_model'])
-            if context:
-                messages.append({"role": "system", "content": f"Información del manual: {context}"})
-            
-            messages.extend(self.conversation_context['history'][-3:])
-            messages.append({"role": "user", "content": message})
-            
+            messages.extend(self.conversation_history[-5:])  # Últimos 5 mensajes
+
+            # Llamar a OpenAI
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini-2024-07-18",
+                model="gpt-4o",
                 messages=messages,
+                max_tokens=2000,
                 temperature=0.7
             )
-            
-            assistant_response = response.choices[0].message.content
-            
-            # Actualizar historial
-            self.conversation_context['history'].append(
-                {"role": "user", "content": message}
-            )
-            self.conversation_context['history'].append(
-                {"role": "assistant", "content": assistant_response}
-            )
-            
-            return {"response": assistant_response}
-            
+
+            # Extraer y guardar respuesta
+            assistant_response = response.choices[0].message.content.strip()
+            self.conversation_history.append({"role": "assistant", "content": assistant_response})
+
+            return assistant_response
+
         except Exception as e:
-            return {"error": str(e)}
+            logger.error(f"Error en get_chat_response: {str(e)}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    def _extract_model_from_message(self, message: str) -> Optional[str]:
+        """
+        Extrae el número de modelo del mensaje del usuario
+        """
+        # Patrones de modelo (S/W/A/H seguido de números y letras)
+        patterns = [
+            r'[SWAH][A-Z0-9]{2,}[A-Z0-9]*(?:ENF|ENFX|AIDV|AIDVB|DGX|DGN|EX|EDC|PB|DTD|DDTD)?'
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, message.upper())
+            if matches:
+                # Filtrar palabras comunes que podrían coincidir por error
+                filtered_matches = [m for m in matches if m not in ['HOLA', 'HACE', 'SABE']]
+                if filtered_matches:
+                    return filtered_matches[0]
+        
+        return None
+
+    def _get_brand_and_type(self, model: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Determina la marca y tipo de producto basado en el modelo
+        """
+        # Mapeo de letras iniciales a marcas
+        brands = {
+            'S': 'SVAN',
+            'W': 'WONDER',
+            'A': 'ASPES',
+            'H': 'HYUNDAI'
+        }
+        
+        # Mapeo de códigos a tipos de producto
+        product_types = {
+            # Lavado
+            'L': 'lavadora',
+            'LS': 'lavadora secadora',
+            'LCS': 'lavadora carga superior',
+            
+            # Frío
+            'C': 'combi',
+            'CV': 'congelador vertical',
+            'CH': 'congelador horizontal',
+            'F': 'frigorífico',
+            'FP': 'frigorífico peltier',
+            
+            # Cocción
+            'H': 'horno',
+            'V': 'vitrocerámica',
+            'M': 'microondas',
+            'MW': 'microondas',
+            'MWI': 'microondas integrado',
+            'SGW': 'placa de gas',
+            
+            # Campanas
+            'K': 'campana',
+            'CPD': 'campana decorativa',
+            'CPE': 'campana extraíble',
+            'CPP': 'campana piramidal',
+            'CPT': 'campana tipo t',
+            
+            # Otros
+            'VN': 'vinoteca',
+            'J': 'lavavajillas',
+            'LV': 'lavavajillas',
+            'T': 'termo',
+            'TV': 'televisor'
+        }
+
+        brand = brands.get(model[0].upper())
+        
+        # Intentar encontrar el tipo de producto
+        product_type = None
+        if len(model) >= 3:
+            # Primero intentar con 3 letras
+            type_code = model[:3].upper()
+            if type_code in product_types:
+                product_type = product_types[type_code]
+            else:
+                # Intentar con 2 letras
+                type_code = model[:2].upper()
+                if type_code in product_types:
+                    product_type = product_types[type_code]
+                else:
+                    # Intentar con 1 letra
+                    type_code = model[0].upper()
+                    if type_code in product_types:
+                        product_type = product_types[type_code]
+        
+        return brand, product_type
+
+    async def process_attachment(self, file_path: Path) -> None:
+        """
+        Procesa un archivo adjunto
+        """
+        # Por implementar: procesamiento de archivos adjuntos
+        pass 
