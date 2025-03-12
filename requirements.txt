@@ -20,6 +20,7 @@ azure-core==1.30.0
 azure-identity==1.15.0
 msrest==0.7.1
 azure-common==1.1.28
+redis>=5.0.0
 
 # HTTP Requests
 requests==2.31.0

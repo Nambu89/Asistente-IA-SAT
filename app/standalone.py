@@ -138,33 +138,62 @@ async def fullchat(request: Request, message: str = Form(None), attachments: lis
         logger.info("========== INICIO PROCESAMIENTO /fullchat ==========")
         
         if not message:
-            return {"response": "¡Hola! Soy el Asistente Técnico de SVAN. ¿En qué puedo ayudarte hoy?"}
+            return {"response": "¡Hola! Soy SvanIA, el Asistente Técnico de SVAN. ¿En qué puedo ayudarte?"}
             
         logger.info(f"Mensaje recibido: {message}")
         
         # Crear una respuesta que incluirá la cookie de sesión
         json_response = None
         
-        # Buscar patrones de modelo (letras seguidas de números)
-        models = re.findall(r'[SWAH][A-Z0-9]{2,}', message.upper())
-        logger.info(f"Modelos detectados: {models}")
-        
-        # Filtrar modelos para evitar falsos positivos (palabras comunes)
-        common_words = ['HACE', 'HUELE', 'HOLA', 'HABER', 'SABER', 'SOBRE', 'ALGO']
-        filtered_models = [m for m in models if m not in common_words]
-        
-        # Si se detecta un modelo en este mensaje, actualizamos el modelo actual
-        if filtered_models:
-            model = filtered_models[0]
-            session_data["current_model"] = model
-            logger.info(f"Modelo actualizado a: {model}")
+        # 1. Obtener el modelo actual de la sesión (si existe)
+        model = session_data.get("current_model")
+        logger.info(f"Modelo en la sesión actual: {model}")
+
+        # 2. Verificar si mantenemos el modelo actual
+        if model and not re.search(r'[SWAH][A-Za-z0-9]{2,}[0-9]+', message.upper()):
+            logger.info(f"Manteniendo modelo actual: {model} (no se detectó un cambio explícito)")
         else:
-            # Si no se detecta un modelo, usamos el último conocido
-            model = session_data["current_model"]
-            logger.info(f"Usando modelo previo: {model}")
+            # 3. Buscar posibles modelos mencionados en el mensaje actual
+            models = re.findall(r'[SWAH][A-Za-z0-9]{2,}', message.upper())
+            logger.info(f"Posibles modelos mencionados: {models}")
+            
+            # 4. Filtrar falsos positivos, requiriendo al menos un dígito en el modelo
+            valid_models = [m for m in models if re.search(r'[0-9]', m)]
+            logger.info(f"Modelos válidos filtrados: {valid_models}")
+            
+            # 5. Si encontramos modelos válidos, actualizar
+            if valid_models:
+                new_model = valid_models[0]
+                
+                # Si ya teníamos un modelo y es diferente al nuevo, registrar el cambio
+                if model and model != new_model:
+                    logger.info(f"Cambiando de modelo: {model} -> {new_model}")
+                
+                model = new_model
+                session_data["current_model"] = model
+                logger.info(f"Modelo establecido/actualizado a: {model}")
         
         # Si no hay modelo (ni en este mensaje ni en mensajes anteriores)
         if not model:
+            # Si es un saludo o mensaje inicial
+            if any(word.lower() in message.lower() for word in ['hola', 'buenas', 'buenos días', 'buenas tardes', 'buenas noches']):
+                response = "¡Hola! Me alegro de saludarte. Para poder ayudarte mejor, ¿podrías decirme qué modelo de producto estás usando?"
+                
+                # Guardar este mensaje en el historial
+                session_data["messages"].append({"role": "user", "content": message})
+                session_data["messages"].append({"role": "assistant", "content": response})
+                
+                # Guardar el historial actualizado
+                await save_conversation_history(session_id, session_data)
+                
+                # Crear respuesta con cookie
+                json_response = {"response": response}
+                if request:
+                    response_obj = JSONResponse(content=json_response)
+                    response_obj.set_cookie(key="svan_session", value=session_id, max_age=SESSION_EXPIRY, httponly=True, samesite="lax")
+                    return response_obj
+                return json_response
+            
             # Si el mensaje actual es solo un problema técnico genérico, preguntar por el modelo
             problem_patterns = [
                 r'error', r'no funciona', r'no enciende', r'no hace', r'problema', 
@@ -173,6 +202,8 @@ async def fullchat(request: Request, message: str = Form(None), attachments: lis
             
             if any(re.search(pattern, message.lower()) for pattern in problem_patterns):
                 logger.info("Detectada consulta técnica sin modelo específico")
+                
+                response = "Entiendo que estás teniendo problemas técnicos. Para poder ayudarte de la mejor manera posible, ¿podrías decirme el modelo exacto de tu producto? Lo encontrarás en la etiqueta del aparato, y empezará por S (SVAN), W (WONDER), A (ASPES) o H (HYUNDAI)."
                 
                 # Guardar este mensaje en el historial
                 session_data["messages"].append({"role": "user", "content": message})
@@ -193,7 +224,7 @@ async def fullchat(request: Request, message: str = Form(None), attachments: lis
                 return json_response
             
             # Para conversaciones generales sin modelo
-            basic_response = "Por favor, indícame el modelo específico del producto sobre el que necesitas información. Los modelos comienzan con S (SVAN), W (WONDER), A (ASPES) o H (HYUNDAI)."
+            basic_response = "Me encantaría ayudarte. Para poder darte la información más precisa, ¿podrías indicarme el modelo de tu producto?"
             
             # Crear respuesta con cookie
             json_response = {"response": basic_response}
@@ -221,7 +252,7 @@ async def fullchat(request: Request, message: str = Form(None), attachments: lis
         # Asegurar que tenemos contenido
         content = manual.get('content')
         if not content:
-            error_response = f"He encontrado el manual para {model}, pero no contiene información. Por favor, contacta con soporte técnico."
+            error_response = f"He encontrado la referencia del modelo {model}, pero parece que hay un problema con la documentación técnica. Por favor, contacta con nuestro servicio técnico para que podamos ayudarte mejor."
             json_response = {"response": error_response}
             if request:
                 response_obj = JSONResponse(content=json_response)
@@ -240,6 +271,40 @@ async def fullchat(request: Request, message: str = Form(None), attachments: lis
         
         # Diccionario de prefijos para todos los tipos de producto
         product_prefixes = {
+            # Hyundai - Debe ir primero para evitar conflictos
+            'HYL': 'lavadora',
+            'HA': 'frigorifico americano',
+            'HAF': 'air fryer',
+            'HF': 'frigorífico',
+            'HC': 'combi no frost',
+            'HYC': 'combi no frost',
+            'HYCPT': 'campana tipo t',
+            'HCP': 'campana',
+            'HCPD': 'campana decorativa',
+            'HYPC': 'encimera gas',
+            'HYPG': 'encimera gas',
+            'HR': 'refrigerador ciclico',
+            'H4': 'frigorifico 4 puertas',
+            'HYF': 'refrigerador no frost',
+            'HCH': 'congelador horizontal',
+            'HCV': 'congelador cíclico',
+            'HYCV': 'congelador no frost',
+            'HIFZ': 'inducción',
+            'HYV': 'vitrocerámica',
+            'HYH': 'horno',
+            'HYF': 'frigorífico ciclico',
+            'HH': 'horno',
+            'HMW': 'microondas',
+            'HL': 'lavadora',
+            'HYLS': 'lavadora secadora',
+            'HSB': 'secadora bomba calor',
+            'HSE': 'secadora evaciación',
+            'HTV': 'televisor',
+            'HJ': 'lavavajillas',
+            'HJI': 'lavavajillas',
+            'HV': 'vitrocerámica',
+            'HYLA': 'lavavajillas',
+            # Resto de marcas
             'SGW': 'cocina de gas',
             'SG': 'cocina de gas',
             'I': 'inducción',
@@ -285,10 +350,26 @@ async def fullchat(request: Request, message: str = Form(None), attachments: lis
         product_type = "electrodoméstico"
         # Ordenar por longitud del prefijo (más largo primero) para evitar coincidencias parciales
         sorted_prefixes = sorted(product_prefixes.items(), key=lambda x: len(x[0]), reverse=True)
-        for prefix, type_name in sorted_prefixes:
-            if model.startswith(prefix):
-                product_type = type_name
-                break
+        
+        # Manejo especial para productos Hyundai
+        if model.startswith('HY') or (model.startswith('H') and not model.startswith('HY')):
+            # Para modelos que empiezan con HY, usar los primeros 3 caracteres
+            if model.startswith('HY'):
+                product_code = model[:3]
+            # Para modelos que empiezan con H o HL, usar los primeros 2 caracteres
+            else:
+                product_code = model[:2]
+                
+            for prefix, type_name in sorted_prefixes:
+                if prefix == product_code:
+                    product_type = type_name
+                    break
+        else:
+            # Proceso normal para otras marcas
+            for prefix, type_name in sorted_prefixes:
+                if model.startswith(prefix):
+                    product_type = type_name
+                    break
         
         # Extraer palabras clave del mensaje del usuario para mejor comprensión
         user_message_lower = message.lower()
