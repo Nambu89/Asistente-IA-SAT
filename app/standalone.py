@@ -6,10 +6,41 @@ from fastapi.responses import JSONResponse
 from openai import OpenAI
 from app.services.azure_search_service import AzureSearchService
 from app.core.settings import Settings
+import redis
+import json
+import secrets
+import os
+from typing import Optional
 
 # Configuración
 settings = Settings()
 openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+
+# Configuración de Redis (ajusta estos parámetros según tu entorno)
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
+REDIS_SSL = os.getenv("REDIS_SSL", "False").lower() == "true"
+
+# Configuración de la sesión
+SESSION_EXPIRY = 86400 * 7  # 1 semana en segundos
+
+# Inicializar cliente Redis
+try:
+    redis_client = redis.Redis(
+        host=REDIS_HOST,
+        port=REDIS_PORT,
+        password=REDIS_PASSWORD,
+        ssl=REDIS_SSL,
+        decode_responses=True
+    )
+    redis_client.ping()  # Verificar conexión
+    redis_available = True
+    logging.info("Conexión a Redis establecida correctamente")
+except Exception as e:
+    logging.error(f"Error al conectar con Redis: {str(e)}")
+    logging.warning("Utilizando almacenamiento en memoria como fallback")
+    redis_available = False
 
 # Configurar logging detallado
 logger = logging.getLogger(__name__)
@@ -22,8 +53,72 @@ logger.addHandler(handler)
 # Crear router para integrarlo en la aplicación principal
 router = APIRouter()
 
-# Historial de conversación para mantener contexto
+# Historial de conversación para mantener contexto (fallback si Redis no está disponible)
 conversation_history = {}
+
+async def get_session_id(request: Request):
+    """
+    Obtiene o crea un identificador de sesión para el usuario.
+    Busca primero en cookies, luego crea uno nuevo si es necesario.
+    """
+    session_cookie = request.cookies.get("svan_session")
+    
+    if session_cookie:
+        logger.info(f"Usando session_id existente de cookie: {session_cookie[:8]}...")
+        return session_cookie
+    
+    # Si no hay cookie, creamos un nuevo ID de sesión
+    new_session_id = f"session_{secrets.token_hex(16)}"
+    logger.info(f"Creando nuevo session_id: {new_session_id[:8]}...")
+    
+    return new_session_id
+
+async def get_conversation_history(session_id: str):
+    """
+    Recupera el historial de conversación desde Redis o memoria.
+    """
+    if redis_available:
+        try:
+            # Intentar obtener datos de Redis
+            history_key = f"svan:chat:{session_id}"
+            data = redis_client.get(history_key)
+            
+            if data:
+                return json.loads(data)
+        except Exception as e:
+            logger.error(f"Error recuperando datos de Redis: {str(e)}")
+    
+    # Fallback a memoria o inicializar nuevo historial
+    if session_id not in conversation_history:
+        conversation_history[session_id] = {
+            "current_model": None,
+            "messages": []
+        }
+    
+    return conversation_history[session_id]
+
+async def save_conversation_history(session_id: str, history_data):
+    """
+    Guarda el historial de conversación en Redis y respaldo en memoria.
+    """
+    # Siempre actualizamos la copia en memoria como fallback
+    conversation_history[session_id] = history_data
+    
+    if redis_available:
+        try:
+            # Guardar en Redis con expiración
+            history_key = f"svan:chat:{session_id}"
+            redis_client.set(
+                history_key,
+                json.dumps(history_data),
+                ex=SESSION_EXPIRY
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error guardando datos en Redis: {str(e)}")
+            return False
+    
+    return True
 
 @router.post("/fullchat")
 async def fullchat(request: Request, message: str = Form(None), attachments: list[UploadFile] = File(None)):
@@ -33,16 +128,11 @@ async def fullchat(request: Request, message: str = Form(None), attachments: lis
     También mantiene el contexto de la conversación.
     """
     try:
-        # Obtener una identificación única para la sesión (IP del cliente + user agent)
-        client_host = request.client.host
-        user_agent = request.headers.get("user-agent", "")
-        session_id = f"{client_host}_{user_agent[:20]}"
+        # Obtener o generar ID de sesión
+        session_id = await get_session_id(request) if request else "default_session"
         
-        if session_id not in conversation_history:
-            conversation_history[session_id] = {
-                "current_model": None,
-                "messages": []
-            }
+        # Recuperar historial para esta sesión
+        session_data = await get_conversation_history(session_id)
             
         # Log de inicio
         logger.info("========== INICIO PROCESAMIENTO /fullchat ==========")
@@ -52,37 +142,28 @@ async def fullchat(request: Request, message: str = Form(None), attachments: lis
             
         logger.info(f"Mensaje recibido: {message}")
         
-        # 1. Obtener el modelo actual de la conversación (si existe)
-        model = conversation_history[session_id]["current_model"]
-        logger.info(f"Modelo en la sesión actual: {model}")
+        # Crear una respuesta que incluirá la cookie de sesión
+        json_response = None
         
-        # 2. Buscar patrones de modelo (letras seguidas de números)
+        # Buscar patrones de modelo (letras seguidas de números)
         models = re.findall(r'[SWAH][A-Z0-9]{2,}', message.upper())
-        logger.info(f"Modelos detectados inicialmente: {models}")
+        logger.info(f"Modelos detectados: {models}")
         
-        # 3. Filtrar modelos para que sean válidos (contienen al menos un número)
-        valid_models = []
-        for potential_model in models:
-            if re.search(r'[0-9]', potential_model):
-                valid_models.append(potential_model)
+        # Filtrar modelos para evitar falsos positivos (palabras comunes)
+        common_words = ['HACE', 'HUELE', 'HOLA', 'HABER', 'SABER', 'SOBRE', 'ALGO']
+        filtered_models = [m for m in models if m not in common_words]
         
-        logger.info(f"Modelos válidos (contienen números): {valid_models}")
-        
-        # 4. Actualizar el modelo sólo si encontramos uno válido
-        if valid_models:
-            new_model = valid_models[0]
-            # Si ya teníamos un modelo y es diferente al nuevo, registrar el cambio
-            if model and model != new_model:
-                logger.info(f"Cambiando de modelo: {model} -> {new_model}")
-            
-            model = new_model
-            conversation_history[session_id]["current_model"] = model
-            logger.info(f"Modelo establecido/actualizado a: {model}")
+        # Si se detecta un modelo en este mensaje, actualizamos el modelo actual
+        if filtered_models:
+            model = filtered_models[0]
+            session_data["current_model"] = model
+            logger.info(f"Modelo actualizado a: {model}")
         else:
-            # Si no se detecta un modelo válido, mantenemos el actual
-            logger.info(f"No se detectaron modelos válidos, manteniendo modelo actual: {model}")
+            # Si no se detecta un modelo, usamos el último conocido
+            model = session_data["current_model"]
+            logger.info(f"Usando modelo previo: {model}")
         
-        # Procesar mensajes con o sin modelo
+        # Si no hay modelo (ni en este mensaje ni en mensajes anteriores)
         if not model:
             # Si el mensaje actual es solo un problema técnico genérico, preguntar por el modelo
             problem_patterns = [
@@ -94,49 +175,65 @@ async def fullchat(request: Request, message: str = Form(None), attachments: lis
                 logger.info("Detectada consulta técnica sin modelo específico")
                 
                 # Guardar este mensaje en el historial
-                conversation_history[session_id]["messages"].append({"role": "user", "content": message})
+                session_data["messages"].append({"role": "user", "content": message})
                 
                 response = "Para poder ayudarte con ese problema técnico, necesito saber el modelo específico del producto. Los modelos comienzan con S (SVAN), W (WONDER), A (ASPES) o H (HYUNDAI)."
                 
-                conversation_history[session_id]["messages"].append({"role": "assistant", "content": response})
-                logger.info("Solicitando modelo para la consulta técnica")
-                return {"response": response}
+                session_data["messages"].append({"role": "assistant", "content": response})
+                
+                # Guardar el historial actualizado
+                await save_conversation_history(session_id, session_data)
+                
+                # Crear respuesta con cookie
+                json_response = {"response": response}
+                if request:
+                    response_obj = JSONResponse(content=json_response)
+                    response_obj.set_cookie(key="svan_session", value=session_id, max_age=SESSION_EXPIRY, httponly=True, samesite="lax")
+                    return response_obj
+                return json_response
             
-            # Si es una consulta general, procesamos sin referencia a un manual específico
-            logger.info("Procesando como consulta general")
-            return await process_general_query(message, conversation_history[session_id])
+            # Para conversaciones generales sin modelo
+            basic_response = "Por favor, indícame el modelo específico del producto sobre el que necesitas información. Los modelos comienzan con S (SVAN), W (WONDER), A (ASPES) o H (HYUNDAI)."
+            
+            # Crear respuesta con cookie
+            json_response = {"response": basic_response}
+            if request:
+                response_obj = JSONResponse(content=json_response)
+                response_obj.set_cookie(key="svan_session", value=session_id, max_age=SESSION_EXPIRY, httponly=True, samesite="lax")
+                return response_obj
+            return json_response
         
         # Inicializar servicio de búsqueda
         search_service = AzureSearchService()
         
-        # Buscar el manual con verificación exhaustiva
-        logger.info(f"Buscando manual para modelo: {model}")
+        # Buscar el manual
         manual = await search_service.get_manual_by_model(model)
         
         if not manual:
-            logger.warning(f"No se encontró manual para el modelo: {model}")
+            error_response = f"Lo siento, no he encontrado un manual para el modelo {model}. Por favor, verifica que el código sea correcto."
+            json_response = {"response": error_response}
+            if request:
+                response_obj = JSONResponse(content=json_response)
+                response_obj.set_cookie(key="svan_session", value=session_id, max_age=SESSION_EXPIRY, httponly=True, samesite="lax")
+                return response_obj
+            return json_response
             
-            # Guardar mensaje en historial aunque no tengamos manual
-            conversation_history[session_id]["messages"].append({"role": "user", "content": message})
-            
-            # Intentamos responder lo mejor posible sin manual
-            return await process_fallback_query(message, model, conversation_history[session_id])
-            
-        # Extraer y verificar el contenido
+        # Asegurar que tenemos contenido
         content = manual.get('content')
         if not content:
-            logger.warning(f"Manual encontrado para {model}, pero sin contenido")
-            conversation_history[session_id]["messages"].append({"role": "user", "content": message})
-            response = f"He encontrado el manual para {model}, pero no contiene información. Por favor, contacta con soporte técnico."
-            conversation_history[session_id]["messages"].append({"role": "assistant", "content": response})
-            return {"response": response}
+            error_response = f"He encontrado el manual para {model}, pero no contiene información. Por favor, contacta con soporte técnico."
+            json_response = {"response": error_response}
+            if request:
+                response_obj = JSONResponse(content=json_response)
+                response_obj.set_cookie(key="svan_session", value=session_id, max_age=SESSION_EXPIRY, httponly=True, samesite="lax")
+                return response_obj
+            return json_response
             
-        # Log detallado del contenido para verificación
-        content_length = len(content)
-        logger.info(f"Contenido recuperado, longitud: {content_length} caracteres")
-        logger.info(f"Primeros 200 caracteres:\n{content[:200]}")
-        logger.info(f"Últimos 200 caracteres:\n{content[-200:] if content_length > 200 else content}")
-        
+        # Log del contenido para verificación
+        logger.info(f"Contenido recuperado, longitud: {len(content)} caracteres")
+        logger.info(f"Primeros 200 caracteres: {content[:200]}")
+        logger.info(f"Últimos 200 caracteres: {content[-200:] if len(content) > 200 else content}")
+            
         # Determinar marca por la primera letra
         brand_map = {'A': 'ASPES', 'S': 'SVAN', 'W': 'WONDER', 'H': 'HYUNDAI'}
         brand = brand_map.get(model[0], 'Desconocida')
@@ -203,9 +300,7 @@ async def fullchat(request: Request, message: str = Form(None), attachments: lis
             "huele": "problemas de olor a gas u olores extraños",
             "ruido": "problemas de ruidos extraños",
             "error": "códigos de error",
-            "fallo": "fallos o averías",
-            "e": "códigos de error que empiecen por E",
-            "f": "códigos de error que empiecen por F"
+            "fallo": "fallos o averías"
         }
         
         detected_problems = []
@@ -217,75 +312,14 @@ async def fullchat(request: Request, message: str = Form(None), attachments: lis
         if detected_problems:
             problem_focus = "Específicamente, el usuario está preguntando sobre: " + ", ".join(detected_problems)
         
-        is_asking_about_manuals = False
-        user_message_lower = message.lower()
-        manual_keywords = [
-            "manuales disponibles", 
-            "manuales tienes", 
-            "qué manuales", 
-            "que manuales",
-            "cuáles manuales",
-            "cuales manuales",
-            "a qué manuales",
-            "a que manuales",
-            "acceso a manuales",
-            "qué modelos",
-            "que modelos"
-        ]
-
-        # Verificación más exhaustiva
-        if any(keyword in user_message_lower for keyword in manual_keywords):
-            is_asking_about_manuals = True
-            logger.info(f"Usuario preguntando por manuales disponibles. Mensaje: '{message}'")
-
-        if is_asking_about_manuals:
-            logger.info("Procesando solicitud de listado de manuales disponibles")
-            try:
-                search_service = AzureSearchService()
-                all_docs = await search_service.search_manuals()
-                logger.info(f"Total de documentos encontrados: {len(all_docs)}")
-                
-                # Imprimir todos los documentos para depuración
-                for i, doc in enumerate(all_docs):
-                    modelo = doc.get('modelo', 'Sin modelo')
-                    nombre = doc.get('name', 'Sin nombre')
-                    logger.info(f"Documento {i+1}: Modelo={modelo}, Nombre={nombre}")
-                
-                # Extraer solo los modelos de los documentos
-                available_models = []
-                for doc in all_docs:
-                    model = doc.get('modelo')
-                    if model and model not in available_models:
-                        available_models.append(model)
-                
-                logger.info(f"Modelos disponibles encontrados: {available_models}")
-                
-                if available_models:
-                    response = "Actualmente tengo acceso a los manuales de los siguientes modelos:\n\n"
-                    for model_name in available_models:
-                        response += f"- {model_name}\n"
-                    response += "\n¿Con cuál de estos modelos necesitas ayuda?"
-                else:
-                    logger.warning("No se encontraron modelos disponibles en el índice")
-                    response = "Lo siento, no puedo acceder a la lista de manuales disponibles en este momento. Sin embargo, puedo ayudarte con algunos modelos específicos como SL8401AIDVBX, SGW4600X, WI3600, entre otros. Por favor, indícame el modelo específico con el que necesitas ayuda."
-            except Exception as e:
-                logger.error(f"Error obteniendo manuales disponibles: {str(e)}", exc_info=True)
-                response = "Lo siento, no puedo acceder a la lista de manuales disponibles en este momento debido a un error técnico. Sin embargo, puedo ayudarte con algunos modelos específicos. Por favor, indícame el modelo con el que necesitas ayuda."
-            
-            # Actualizar historial de conversación
-            conversation_history[session_id]["messages"].append({"role": "user", "content": message})
-            conversation_history[session_id]["messages"].append({"role": "assistant", "content": response})
-            
-            return {"response": response}
-        
-        # MANUAL COMPLETO - Con instrucciones explícitas y enfáticas
+        # MANUAL COMPLETO - Instrucciones mejoradas
         full_manual_context = f"""Modelo actual: {model}
 Marca: {brand}
 Tipo: {product_type}
 
-INSTRUCCIONES CRÍTICAS PARA EL ASISTENTE:
-1. DEBES LEER EL MANUAL TÉCNICO COMPLETO proporcionado a continuación.
-2. NO OMITAS NI IGNORES NINGUNA PARTE del manual, es ESENCIAL que proceses TODO el contenido.
+INSTRUCCIONES CRÍTICAS:
+1. Eres un asistente técnico especializado. Usa ÚNICAMENTE la información del manual técnico proporcionado a continuación.
+2. DEBES leer y analizar TODO el manual completo que se proporciona a continuación.
 3. ATENCIÓN: Este manual puede contener soluciones para problemas comunes incluso si no están codificados como errores (E1, E2, etc.):
    - Si el usuario menciona problemas como "no hace chispa", "huele a gas", "no enciende", busca estas palabras clave en el manual.
    - Busca secciones como "Troubleshooting", "Problemas y soluciones", "Mantenimiento" o similares.
@@ -294,31 +328,30 @@ INSTRUCCIONES CRÍTICAS PARA EL ASISTENTE:
    - Busca y lista TODOS los códigos de error mencionados en el manual.
    - Incluye las descripciones EXACTAS de cada código.
 5. {problem_focus}
-6. Usa ÚNICAMENTE información del manual - NO INVENTES ni añadas información que no esté explícitamente en el documento.
+6. IMPORTANTE: Recuerda los detalles de la conversación anterior para mantener el contexto. Si el usuario ya ha mencionado un problema o información técnica, tómalo en cuenta.
+7. Si el usuario pregunta sobre un tema técnico o valor específico (como "valor de NTC"), encuentra esta información en el manual y responde con precisión.
+8. Usa ÚNICAMENTE información del manual - NO INVENTES ni añadas información que no esté explícitamente en el documento.
 
-MANUAL TÉCNICO COMPLETO PARA MODELO {model}:
+MANUAL TÉCNICO COMPLETO:
 {content}"""
 
-        # Verificar tamaño del contexto antes de enviar
-        max_context = 100000  # Límite razonable
-        context_length = len(full_manual_context)
-        
-        if context_length > max_context:
-            logger.warning(f"¡ADVERTENCIA! El contexto es muy largo ({context_length} caracteres). Truncando a {max_context}.")
+        # Evitar contextos demasiado largos
+        max_context = 100000  # Límite razonable 
+        if len(full_manual_context) > max_context:
+            logger.warning(f"El contexto es muy largo ({len(full_manual_context)} caracteres). Truncando a {max_context}.")
             full_manual_context = full_manual_context[:max_context]
-            logger.info("Contexto truncado")
         
-        # Log detallado del tamaño final
+        # Asegurar que sabemos el tamaño exacto
         logger.info(f"Tamaño del contexto final enviado: {len(full_manual_context)} caracteres")
         
-        # Obtener historial de conversación reciente (últimos 4 mensajes)
-        recent_history = conversation_history[session_id]["messages"][-4:] if conversation_history[session_id]["messages"] else []
+        # Obtener historial de conversación reciente - AUMENTADO a 10 mensajes
+        recent_history = session_data["messages"][-10:] if session_data["messages"] else []
         
-        # Construir mensajes con instrucciones enfáticas
+        # Construir mensajes
         messages = [
             {"role": "system", "content": settings.SYSTEM_PROMPT},
-            {"role": "system", "content": "IMPORTANTE: Tienes la capacidad de analizar imágenes. Cuando los usuarios pregunten si puedes procesar o analizar imágenes, debes responder que SÍ y explicar tus capacidades de análisis visual."},
-            # CRUCIAL: Envía el manual completo en un único mensaje con instrucciones claras
+            {"role": "system", "content": "IMPORTANTE: Tu nombre es Svania, no Svaniano. Eres el Asistente Técnico de SVAN. Tienes la capacidad de analizar imágenes. Cuando los usuarios pregunten si puedes procesar o analizar imágenes, debes responder que SÍ y explicar tus capacidades de análisis visual."},
+            # CRUCIAL: Envía el manual completo en un único mensaje
             {"role": "system", "content": full_manual_context}
         ]
         
@@ -328,151 +361,42 @@ MANUAL TÉCNICO COMPLETO PARA MODELO {model}:
         # Añadir el mensaje actual del usuario
         messages.append({"role": "user", "content": message})
         
-        # Log detallado de la cantidad de mensajes
-        logger.info(f"Total de mensajes enviados a OpenAI: {len(messages)}")
-        
-        # Llamar a OpenAI con modelo potente y parámetros optimizados
-        logger.info("Enviando solicitud a OpenAI con modelo gpt-4o...")
+        # Llamar a OpenAI con modelo más potente
+        logger.info(f"Enviando solicitud a OpenAI con modelo gpt-4o y {len(messages)} mensajes...")
         response_openai = openai_client.chat.completions.create(
-            model="gpt-4o",  # Modelo completo para mayor capacidad
+            model="gpt-4o",  # Usar modelo completo, no mini
             messages=messages,
             max_tokens=2000,
-            temperature=0.2,  # Temperatura baja para respuestas más precisas
+            temperature=0.2,  # Baja temperatura para mayor precisión
         )
         
-        # Extraer respuesta
+        # Extraer y retornar la respuesta
         response = response_openai.choices[0].message.content.strip()
-        logger.info(f"Respuesta recibida de OpenAI: {len(response)} caracteres")
+        logger.info(f"Respuesta generada: {len(response)} caracteres")
         
         # Actualizar historial de conversación
-        conversation_history[session_id]["messages"].append({"role": "user", "content": message})
-        conversation_history[session_id]["messages"].append({"role": "assistant", "content": response})
-        
-        # Limitar tamaño del historial (mantener últimos 10 mensajes)
-        if len(conversation_history[session_id]["messages"]) > 10:
-            conversation_history[session_id]["messages"] = conversation_history[session_id]["messages"][-10:]
-        
-        logger.info("========== FIN PROCESAMIENTO /fullchat ==========")
-        
-        return {"response": response}
-
-    except Exception as e:
-        logger.error(f"Error procesando consulta en /fullchat: {str(e)}", exc_info=True)
-        return {"response": "Lo siento, ha ocurrido un error al procesar tu consulta. Por favor, intenta nuevamente."}
-
-
-async def process_general_query(message: str, session_data: dict):
-    """
-    Procesa consultas generales sin necesidad de un manual específico
-    """
-    try:
-        # Construir mensajes para consulta general
-        messages = [
-            {"role": "system", "content": settings.SYSTEM_PROMPT},
-            {"role": "system", "content": """
-            INSTRUCCIONES: 
-            - Eres un asistente técnico especializado en productos del Grupo SVAN.
-            - Para consultas técnicas específicas, debes solicitar el modelo del electrodoméstico.
-            - Solo para preguntas generales, responde con información general sin solicitar el modelo.
-            """}
-        ]
-        
-        # Añadir historial reciente (últimos 4 mensajes)
-        if session_data["messages"]:
-            messages.extend(session_data["messages"][-4:])
-        
-        # Añadir el mensaje actual del usuario
-        messages.append({"role": "user", "content": message})
-        
-        # Llamar a OpenAI
-        response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",  # Modelo más pequeño para consultas generales
-            messages=messages,
-            max_tokens=1000,
-            temperature=0.7
-        )
-        
-        response_text = response.choices[0].message.content.strip()
-        
-        # Actualizar historial
         session_data["messages"].append({"role": "user", "content": message})
-        session_data["messages"].append({"role": "assistant", "content": response_text})
+        session_data["messages"].append({"role": "assistant", "content": response})
         
-        # Limitar tamaño del historial
-        if len(session_data["messages"]) > 10:
-            session_data["messages"] = session_data["messages"][-10:]
+        # Limitar tamaño del historial (mantener últimos 20 mensajes - AUMENTADO)
+        if len(session_data["messages"]) > 20:
+            session_data["messages"] = session_data["messages"][-20:]
         
-        return {"response": response_text}
+        # Guardar el historial actualizado
+        await save_conversation_history(session_id, session_data)
         
-    except Exception as e:
-        logger.error(f"Error procesando consulta general: {str(e)}", exc_info=True)
-        return {"response": "Lo siento, ha ocurrido un error al procesar tu consulta. Por favor, intenta nuevamente."}
-
-async def get_available_manuals():
-    """
-    Obtiene la lista de todos los manuales disponibles en el sistema
-    """
-    try:
-        search_service = AzureSearchService()
-        all_docs = await search_service.search_manuals()
-        
-        # Extraer solo los modelos de los documentos
-        available_models = []
-        for doc in all_docs:
-            model = doc.get('modelo')
-            if model and model not in available_models:
-                available_models.append(model)
-        
-        return available_models
-    except Exception as e:
-        logger.error(f"Error obteniendo manuales disponibles: {str(e)}")
-        return []
-
-
-async def process_fallback_query(message: str, model: str, session_data: dict):
-    """
-    Procesa consultas cuando no se encuentra el manual específico
-    """
-    try:
-        # Construir mensajes para fallback
-        messages = [
-            {"role": "system", "content": settings.SYSTEM_PROMPT},
-            {"role": "system", "content": f"""
-            INSTRUCCIONES:
-            - El usuario ha preguntado sobre el modelo {model}, pero no tenemos el manual específico.
-            - Debes informar que no tienes el manual para ese modelo específico.
-            - Puedes ofrecer información general sobre el tipo de producto si lo sabes.
-            - Sugieres contactar al soporte técnico oficial para información más específica.
-            """}
-        ]
-        
-        # Añadir historial reciente
-        if session_data["messages"]:
-            messages.extend(session_data["messages"][-4:])
-        
-        # Añadir el mensaje actual
-        messages.append({"role": "user", "content": message})
-        
-        # Llamar a OpenAI
-        response = openai_client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=messages,
-            max_tokens=1000,
-            temperature=0.7
-        )
-        
-        response_text = response.choices[0].message.content.strip()
-        
-        # Actualizar historial
-        session_data["messages"].append({"role": "user", "content": message})
-        session_data["messages"].append({"role": "assistant", "content": response_text})
-        
-        # Limitar tamaño del historial
-        if len(session_data["messages"]) > 10:
-            session_data["messages"] = session_data["messages"][-10:]
-        
-        return {"response": response_text}
+        # Crear respuesta con cookie
+        json_response = {"response": response}
+        if request:
+            response_obj = JSONResponse(content=json_response)
+            response_obj.set_cookie(key="svan_session", value=session_id, max_age=SESSION_EXPIRY, httponly=True, samesite="lax")
+            return response_obj
+        return json_response
         
     except Exception as e:
-        logger.error(f"Error procesando fallback query: {str(e)}", exc_info=True)
-        return {"response": f"Lo siento, no tengo información específica sobre el modelo {model}. ¿Hay algo más en lo que pueda ayudarte?"}
+        logger.error(f"Error procesando consulta: {str(e)}", exc_info=True)
+        error_response = {"response": "Lo siento, ha ocurrido un error. Por favor, intenta nuevamente."}
+        if request:
+            response_obj = JSONResponse(content=error_response)
+            return response_obj
+        return error_response

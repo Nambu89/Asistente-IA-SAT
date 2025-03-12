@@ -1,7 +1,7 @@
 version: '3'
 services:
   web:
-    image: svaniaregistry.azurecr.io/svania:v1.2.1
+    image: svaniaregistry.azurecr.io/svania:v1.2.2
     ports:
       - "8000:8000"
     environment:

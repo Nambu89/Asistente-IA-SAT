@@ -17,15 +17,28 @@ document.addEventListener('DOMContentLoaded', function() {
     const retakePhotoBtn = document.getElementById('retake-photo');
     const cancelPhotoBtn = document.getElementById('cancel-photo');
     const photoCanvas = document.getElementById('photo-canvas');
+    const searchButton = document.getElementById('search-button');
+    const searchBar = document.getElementById('search-bar');
+    const searchInput = document.getElementById('search-input');
+    const searchPrev = document.getElementById('search-prev');
+    const searchNext = document.getElementById('search-next');
+    const searchClose = document.getElementById('search-close');
+    const searchStats = document.getElementById('search-stats');
+    const searchCurrent = document.getElementById('search-current');
+    const searchTotal = document.getElementById('search-total');
 
     // Estado de la aplicación
     let attachments = [];
     let stream = null;
+    let searchResults = [];
+    let currentResult = -1;
 
     // Inicialización
     function init() {
         clearChat();
         setupEventListeners();
+        initFeedbackSystem();
+        initSearch();
     }
 
     // Configurar event listeners
@@ -50,7 +63,7 @@ document.addEventListener('DOMContentLoaded', function() {
         attachFileBtn.addEventListener('click', () => fileInput.click());
         fileInput.addEventListener('change', handleFileSelect);
 
-        // Nuevos eventos para la cámara
+        // Eventos para la cámara
         takePhotoBtn.addEventListener('click', startCamera);
         capturePhotoBtn.addEventListener('click', capturePhoto);
         retakePhotoBtn.addEventListener('click', retakePhoto);
@@ -88,6 +101,220 @@ document.addEventListener('DOMContentLoaded', function() {
                 this.style.overflowY = 'auto';
             } else {
                 this.style.overflowY = 'hidden';
+            }
+        });
+    }
+
+    // Sistema de feedback
+    function initFeedbackSystem() {
+        // Delegación de eventos para botones de feedback
+        chatMessages.addEventListener('click', function(e) {
+            // Comprobar si el clic fue en un botón de feedback
+            if (e.target.closest('.feedback-button')) {
+                const button = e.target.closest('.feedback-button');
+                const messageDiv = button.closest('.bot-message');
+                const messageId = messageDiv.dataset.messageId;
+                const feedbackForm = messageDiv.querySelector('.feedback-form');
+                const feedbackType = button.classList.contains('thumbs-up') ? 'positive' : 'negative';
+                
+                // Toggle formulario de feedback
+                if (button.classList.contains('thumbs-down')) {
+                    feedbackForm.classList.toggle('hidden');
+                    // Si se muestra el formulario, enfoca el textarea
+                    if (!feedbackForm.classList.contains('hidden')) {
+                        feedbackForm.querySelector('.feedback-comment').focus();
+                    }
+                } else {
+                    // Si es thumbs-up, enviar feedback positivo directamente
+                    submitFeedback(messageId, 5, "");
+                    // Visual feedback
+                    button.classList.add('text-green-500');
+                    setTimeout(() => {
+                        button.classList.remove('text-green-500');
+                        button.classList.add('text-gray-600');
+                        button.disabled = true;
+                    }, 1500);
+                }
+            }
+            
+            // Cancelar feedback
+            if (e.target.closest('.feedback-cancel')) {
+                const feedbackForm = e.target.closest('.feedback-form');
+                feedbackForm.classList.add('hidden');
+            }
+            
+            // Enviar feedback
+            if (e.target.closest('.feedback-submit')) {
+                const messageDiv = e.target.closest('.bot-message');
+                const messageId = messageDiv.dataset.messageId;
+                const commentText = messageDiv.querySelector('.feedback-comment').value;
+                
+                submitFeedback(messageId, 1, commentText);
+                
+                // Ocultar formulario y mostrar confirmación
+                messageDiv.querySelector('.feedback-form').classList.add('hidden');
+                const thumbsDown = messageDiv.querySelector('.thumbs-down');
+                thumbsDown.classList.add('text-red-500');
+                setTimeout(() => {
+                    thumbsDown.classList.remove('text-red-500');
+                    thumbsDown.classList.add('text-gray-600');
+                    thumbsDown.disabled = true;
+                }, 1500);
+            }
+        });
+        
+        // Función para enviar feedback al servidor
+        async function submitFeedback(messageId, rating, comment) {
+            try {
+                const response = await fetch('/api/feedback', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        message_id: messageId,
+                        rating: rating,
+                        comment: comment
+                    })
+                });
+                
+                if (!response.ok) {
+                    console.error('Error al enviar feedback');
+                }
+            } catch (error) {
+                console.error('Error al enviar feedback:', error);
+            }
+        }
+    }
+
+    // Sistema de búsqueda
+    function initSearch() {
+        // Mostrar/ocultar barra de búsqueda
+        searchButton.addEventListener('click', () => {
+            searchBar.classList.toggle('hidden');
+            if (!searchBar.classList.contains('hidden')) {
+                searchInput.focus();
+            }
+        });
+        
+        // Cerrar búsqueda
+        searchClose.addEventListener('click', () => {
+            searchBar.classList.add('hidden');
+            clearSearch();
+        });
+        
+        // Realizar búsqueda
+        searchInput.addEventListener('input', () => {
+            const query = searchInput.value.trim().toLowerCase();
+            if (query.length < 2) {
+                clearSearch();
+                return;
+            }
+            
+            // Buscar en los mensajes
+            searchResults = [];
+            const allMessages = chatMessages.querySelectorAll('.user-message, .bot-message');
+            
+            allMessages.forEach((message, index) => {
+                const text = message.textContent.toLowerCase();
+                if (text.includes(query)) {
+                    searchResults.push({
+                        element: message,
+                        index: index
+                    });
+                }
+            });
+            
+            // Actualizar estadísticas
+            if (searchResults.length > 0) {
+                searchStats.classList.remove('hidden');
+                searchTotal.textContent = searchResults.length;
+                currentResult = 0;
+                searchCurrent.textContent = currentResult + 1;
+                
+                // Habilitar botones de navegación
+                searchPrev.disabled = false;
+                searchNext.disabled = false;
+                
+                // Resaltar primer resultado
+                highlightResult(currentResult);
+            } else {
+                searchStats.classList.remove('hidden');
+                searchTotal.textContent = 0;
+                searchCurrent.textContent = 0;
+                searchPrev.disabled = true;
+                searchNext.disabled = true;
+            }
+        });
+        
+        // Navegación de resultados
+        searchPrev.addEventListener('click', () => {
+            if (searchResults.length === 0) return;
+            
+            currentResult = (currentResult - 1 + searchResults.length) % searchResults.length;
+            searchCurrent.textContent = currentResult + 1;
+            highlightResult(currentResult);
+        });
+        
+        searchNext.addEventListener('click', () => {
+            if (searchResults.length === 0) return;
+            
+            currentResult = (currentResult + 1) % searchResults.length;
+            searchCurrent.textContent = currentResult + 1;
+            highlightResult(currentResult);
+        });
+        
+        // Limpiar búsqueda
+        function clearSearch() {
+            // Eliminar resaltados anteriores
+            const highlighted = chatMessages.querySelectorAll('.search-highlight');
+            highlighted.forEach(el => {
+                el.classList.remove('search-highlight', 'bg-yellow-200');
+            });
+            
+            searchResults = [];
+            currentResult = -1;
+            searchStats.classList.add('hidden');
+            searchPrev.disabled = true;
+            searchNext.disabled = true;
+        }
+        
+        // Resaltar resultado actual
+        function highlightResult(index) {
+            // Eliminar resaltados anteriores
+            const highlighted = chatMessages.querySelectorAll('.search-highlight');
+            highlighted.forEach(el => {
+                el.classList.remove('search-highlight', 'bg-yellow-200');
+            });
+            
+            // Resaltar nuevo resultado
+            if (index >= 0 && index < searchResults.length) {
+                const result = searchResults[index];
+                result.element.classList.add('search-highlight', 'bg-yellow-200');
+                
+                // Desplazarse a la vista
+                result.element.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center'
+                });
+            }
+        }
+        
+        // Búsqueda con Enter
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (searchResults.length > 0) {
+                    currentResult = (currentResult + 1) % searchResults.length;
+                    searchCurrent.textContent = currentResult + 1;
+                    highlightResult(currentResult);
+                }
+            }
+            
+            // Cerrar búsqueda con Escape
+            if (e.key === 'Escape') {
+                searchBar.classList.add('hidden');
+                clearSearch();
             }
         });
     }
@@ -168,10 +395,22 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Gestión de mensajes
     function addMessage(message, type) {
-        const messageDiv = document.createElement('div');
-        messageDiv.className = `p-4 ${type === 'user' ? 'user-message' : 'bot-message'}`;
-        
-        if (type === 'bot') {
+        if (type === 'user') {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'user-message p-4 message-appear';
+            messageDiv.textContent = message;
+            chatMessages.appendChild(messageDiv);
+        } else if (type === 'bot') {
+            // Usar plantilla para mensajes del bot
+            const template = document.getElementById('bot-message-template');
+            const messageDiv = template.content.cloneNode(true).firstElementChild;
+            messageDiv.classList.add('message-appear');
+            
+            // Generar ID único para este mensaje
+            const messageId = 'msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            messageDiv.dataset.messageId = messageId;
+            
+            // Configurar el contenido del mensaje
             marked.setOptions({
                 breaks: true,
                 gfm: true,
@@ -179,7 +418,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 mangle: false
             });
             
-            messageDiv.innerHTML = marked.parse(message);
+            messageDiv.querySelector('.message-content').innerHTML = marked.parse(message);
             
             // Configurar enlaces
             messageDiv.querySelectorAll('a').forEach(link => {
@@ -193,13 +432,20 @@ document.addEventListener('DOMContentLoaded', function() {
             });
 
             messageDiv.querySelectorAll('pre').forEach(el => {
-                el.classList.add('bg-gray-100', 'p-4', 'rounded-md', 'overflow-x-auto');
+                el.classList.add('bg-gray-900', 'text-white', 'p-4', 'rounded-md', 'overflow-x-auto');
             });
-        } else {
+            
+            chatMessages.appendChild(messageDiv);
+            
+            // Disparar evento de respuesta recibida para posibles acciones
+            document.dispatchEvent(new CustomEvent('botResponseReceived'));
+        } else if (type === 'error') {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'error-message p-4 message-appear';
             messageDiv.textContent = message;
+            chatMessages.appendChild(messageDiv);
         }
         
-        chatMessages.appendChild(messageDiv);
         // Scroll suave en móviles
         chatMessages.scrollTo({
             top: chatMessages.scrollHeight,
@@ -255,21 +501,86 @@ document.addEventListener('DOMContentLoaded', function() {
         document.body.classList.remove('camera-active');
     }
 
-    function capturePhoto() {
+    async function capturePhoto() {
         const context = photoCanvas.getContext('2d');
         photoCanvas.width = cameraView.videoWidth;
         photoCanvas.height = cameraView.videoHeight;
         context.drawImage(cameraView, 0, 0, photoCanvas.width, photoCanvas.height);
         
         // Convertir a archivo
-        photoCanvas.toBlob(blob => {
+        photoCanvas.toBlob(async (blob) => {
             const file = new File([blob], `foto_${Date.now()}.jpg`, { type: 'image/jpeg' });
+            
+            // Añadir al array de adjuntos
             attachments.push(file);
             showAttachmentPreview(file);
             
             // Mostrar/ocultar botones
             capturePhotoBtn.classList.add('hidden');
             retakePhotoBtn.classList.remove('hidden');
+            
+            // Intentar detectar códigos de error en la imagen
+            try {
+                // Mostrar indicador de procesamiento
+                const loadingMsg = document.createElement('div');
+                loadingMsg.className = 'text-sm text-white bg-black bg-opacity-50 p-2 rounded';
+                loadingMsg.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Analizando imagen...';
+                loadingMsg.id = 'ocr-loading';
+                document.querySelector('.camera-controls').appendChild(loadingMsg);
+                
+                // Procesar con Tesseract.js para encontrar texto
+                const result = await Tesseract.recognize(
+                    blob,
+                    'spa', // español
+                    { 
+                        logger: m => console.log(m),
+                        errorLimit: 100 // más tolerante con errores
+                    }
+                );
+                
+                // Buscar patrones de códigos de error comunes (E01, E02, F01, etc.)
+                const text = result.data.text;
+                const errorCodes = text.match(/[EF][0-9]{2,3}/g) || [];
+                
+                // Si se encontraron códigos de error
+                if (errorCodes.length > 0) {
+                    // Remover indicador de carga
+                    document.getElementById('ocr-loading').remove();
+                    
+                    // Mostrar códigos encontrados
+                    const foundMsg = document.createElement('div');
+                    foundMsg.className = 'text-sm text-white bg-green-800 bg-opacity-70 p-2 rounded';
+                    foundMsg.innerHTML = `<i class="fas fa-check mr-2"></i> Detectados códigos: ${errorCodes.join(', ')}`;
+                    document.querySelector('.camera-controls').appendChild(foundMsg);
+                    
+                    // Prepopular el input con una consulta sobre el código
+                    userInput.value = `¿Qué significa el código de error ${errorCodes[0]}?`;
+                    
+                    // Desaparecer el mensaje después de 3 segundos
+                    setTimeout(() => {
+                        foundMsg.remove();
+                        stopCamera(); // Cerrar cámara automáticamente
+                    }, 3000);
+                } else {
+                    // Si no se encontraron códigos
+                    document.getElementById('ocr-loading').remove();
+                    
+                    const notFoundMsg = document.createElement('div');
+                    notFoundMsg.className = 'text-sm text-white bg-gray-800 bg-opacity-70 p-2 rounded';
+                    notFoundMsg.innerHTML = `<i class="fas fa-info-circle mr-2"></i> No se detectaron códigos de error`;
+                    document.querySelector('.camera-controls').appendChild(notFoundMsg);
+                    
+                    // Desaparecer el mensaje después de 3 segundos
+                    setTimeout(() => {
+                        notFoundMsg.remove();
+                    }, 3000);
+                }
+            } catch (error) {
+                console.error('Error al analizar imagen:', error);
+                // Remover indicador de carga si existe
+                const loadingEl = document.getElementById('ocr-loading');
+                if (loadingEl) loadingEl.remove();
+            }
         }, 'image/jpeg', 0.8);
     }
 
@@ -294,9 +605,10 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!message && attachments.length === 0) return;
 
         if (message) {
-        addMessage(message, 'user');
+            addMessage(message, 'user');
         }
         userInput.value = '';
+        userInput.style.height = 'auto';
         showLoadingIndicator();
 
         try {

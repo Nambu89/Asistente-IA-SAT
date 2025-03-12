@@ -2,12 +2,13 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Asistente Técnico SVAN</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="{{ url_for('static', path='/css/styles.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <style>
         body {
             margin: 0;
@@ -117,42 +118,100 @@
         #photo-canvas {
             display: none;
         }
+        
+        /* OPTIMIZACIONES PARA MÓVILES */
         @media (max-width: 640px) {
+            body {
+                overflow-x: hidden;
+            }
+            .max-w-4xl {
+                padding: 0 !important;
+                width: 100%;
+                margin: 0;
+                height: 100vh;
+                display: flex;
+                flex-direction: column;
+            }
+            .rounded-lg, .rounded-t-lg {
+                border-radius: 0;
+            }
+            .shadow-lg {
+                box-shadow: none;
+            }
             .user-message {
-                margin-left: 10%;
+                margin-left: 5%;
                 padding: 0.75rem;
                 font-size: 0.95rem;
+                max-width: 90%;
+            }
+            .bot-message {
+                margin-right: 5%;
+                padding: 0.75rem;
+                font-size: 0.95rem;
+                max-width: 90%;
+            }
+            #chat-messages {
+                flex: 1;
+                height: auto !important;
+            }
+            #user-input {
+                font-size: 16px; /* Prevenir zoom en iOS */
+                padding: 0.75rem;
+                height: auto;
+                min-height: 40px;
+            }
+            .chat-controls {
+                position: sticky;
+                bottom: 0;
+                background-color: #fff;
+                z-index: 10;
+                padding: 0.5rem;
+                border-top: 1px solid #e5e7eb;
+            }
+            .attachment-button {
+                padding: 8px;
+                line-height: 1;
+            }
+            #send-button {
+                padding: 8px 16px;
+                min-width: 52px;
+            }
+            .action-buttons {
+                display: flex;
+                align-items: center;
+                gap: 0.5rem;
+            }
+            /* Prevenir desbordamiento en los mensajes en móvil */
+            .bot-message pre {
+                max-width: 100%;
+                overflow-x: auto;
+            }
+            .bot-message img {
+                max-width: 100%;
+                height: auto;
+            }
+            .bot-message table {
+                display: block;
+                overflow-x: auto;
+                max-width: 100%;
+            }
+        }
+        
+        /* Tablet optimizations */
+        @media (min-width: 641px) and (max-width: 1024px) {
+            .user-message {
+                margin-left: 10%;
+                max-width: 85%;
             }
             .bot-message {
                 margin-right: 10%;
-                padding: 0.75rem;
-                font-size: 0.95rem;
-            }
-            #chat-messages {
-                height: calc(100vh - 180px) !important;
+                max-width: 85%;
             }
             .max-w-4xl {
-                padding: 0.5rem !important;
-            }
-            #user-input {
-                font-size: 1rem;
-                padding: 0.5rem;
-            }
-            #send-button {
-                padding: 0.5rem 1rem;
+                padding: 0.75rem !important;
             }
         }
-        @media (min-width: 641px) and (max-width: 1024px) {
-            .user-message {
-                margin-left: 15%;
-            }
-            .bot-message {
-                margin-right: 15%;
-            }
-            #chat-messages {
-                height: calc(100vh - 200px) !important;
-            }
-        }
+        
         @media (max-width: 640px) {
             #camera-preview {
                 padding: 0;
@@ -161,41 +220,110 @@
                 max-height: 80vh;
             }
             .camera-controls {
+                position: absolute;
+                bottom: 0;
+                left: 0;
+                right: 0;
                 padding: 1rem;
                 background: rgba(0, 0, 0, 0.5);
+                display: flex;
+                justify-content: center;
+                gap: 1rem;
             }
             #capture-photo, #retake-photo, #cancel-photo {
                 padding: 0.5rem 1rem;
                 font-size: 0.9rem;
             }
+            /* Bottom safe area for iOS */
+            .chat-controls {
+                padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0));
+            }
         }
+        
         body.camera-active {
             overflow: hidden;
             position: fixed;
             width: 100%;
         }
+        
+        /* Styling for code blocks */
+        .bot-message pre {
+            background-color: #1e293b;
+            color: #f8fafc;
+            padding: 0.75rem;
+            border-radius: 0.375rem;
+            overflow-x: auto;
+            margin: 0.5rem 0;
+        }
+        .bot-message code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 0.875rem;
+        }
+
+        /* Feedback styles */
+        .message-feedback {
+            opacity: 0.5;
+            transition: opacity 0.3s;
+        }
+        .bot-message:hover .message-feedback {
+            opacity: 1;
+        }
+        .feedback-button {
+            background: transparent;
+            border: none;
+            padding: 0.25rem;
+            border-radius: 0.25rem;
+            cursor: pointer;
+        }
+        .search-highlight {
+            transition: background-color 0.3s;
+        }
     </style>
 </head>
 <body>
-    <div class="max-w-4xl mx-auto p-6">
-        <div class="rounded-lg shadow-lg">
+    <div class="max-w-4xl mx-auto p-4">
+        <div class="rounded-lg shadow-lg flex flex-col h-full">
             <!-- Encabezado -->
-            <div class="bg-blue-600 p-4 rounded-t-lg flex justify-between items-center">
-                <h1 class="text-2xl font-bold text-white">Asistente Técnico SVAN</h1>
-                <button id="clear-chat" class="text-white hover:text-gray-200" title="Limpiar chat">
-                    <i class="fas fa-trash"></i>
-                </button>
+            <div class="bg-blue-600 p-3 rounded-t-lg flex justify-between items-center">
+                <h1 class="text-xl font-bold text-white">Asistente Técnico SVAN</h1>
+                <div class="flex items-center gap-2">
+                    <button id="search-button" class="text-white hover:text-gray-200 p-1" title="Buscar en el chat">
+                        <i class="fas fa-search"></i>
+                    </button>
+                    <button id="clear-chat" class="text-white hover:text-gray-200 p-1" title="Limpiar chat">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Barra de búsqueda -->
+            <div id="search-bar" class="bg-white p-2 border-b hidden">
+                <div class="flex items-center gap-2">
+                    <input type="text" id="search-input" class="flex-1 p-2 border rounded-lg text-sm" placeholder="Buscar en la conversación...">
+                    <button id="search-prev" class="text-gray-600 p-1" disabled>
+                        <i class="fas fa-chevron-up"></i>
+                    </button>
+                    <button id="search-next" class="text-gray-600 p-1" disabled>
+                        <i class="fas fa-chevron-down"></i>
+                    </button>
+                    <button id="search-close" class="text-gray-600 p-1">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div id="search-stats" class="text-xs text-gray-500 mt-1 hidden">
+                    Resultado <span id="search-current">0</span> de <span id="search-total">0</span>
+                </div>
             </div>
 
             <!-- Área de mensajes -->
-            <div id="chat-messages" class="h-[600px] overflow-y-auto p-4 bg-white"></div>
+            <div id="chat-messages" class="h-[600px] overflow-y-auto p-3 bg-white flex-1"></div>
 
             <!-- Área de entrada -->
-            <div class="border-t p-4 bg-white">
+            <div class="border-t bg-white chat-controls">
                 <div id="attachments-preview" class="hidden"></div>
                 <div id="camera-preview" class="hidden">
-                    <video id="camera-view" class="w-full rounded-lg mb-2" autoplay playsinline></video>
-                    <div class="flex justify-center gap-2 mb-2">
+                    <video id="camera-view" class="w-full rounded-lg" autoplay playsinline></video>
+                    <div class="camera-controls">
                         <button id="capture-photo" class="bg-blue-600 text-white px-4 py-2 rounded-lg">
                             <i class="fas fa-camera"></i> Capturar
                         </button>
@@ -208,16 +336,18 @@
                     </div>
                     <canvas id="photo-canvas" class="hidden"></canvas>
                 </div>
-                <div class="flex gap-2">
-                    <button type="button" id="attach-file" class="text-gray-600 hover:text-blue-600" title="Adjuntar archivo">
-                        <i class="fas fa-paperclip"></i>
-                    </button>
-                    <button type="button" id="take-photo" class="text-gray-600 hover:text-blue-600" title="Tomar foto">
-                        <i class="fas fa-camera"></i>
-                    </button>
+                <div class="flex gap-2 items-center p-2">
+                    <div class="action-buttons">
+                        <button type="button" id="attach-file" class="text-gray-600 hover:text-blue-600 attachment-button" title="Adjuntar archivo">
+                            <i class="fas fa-paperclip"></i>
+                        </button>
+                        <button type="button" id="take-photo" class="text-gray-600 hover:text-blue-600 attachment-button" title="Tomar foto">
+                            <i class="fas fa-camera"></i>
+                        </button>
+                    </div>
                     <input type="file" id="file-input" class="hidden" multiple>
                     <textarea id="user-input" rows="1" style="resize: none;" class="flex-1 p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Escribe tu mensaje..."></textarea>
-                    <button type="button" id="send-button" class="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700">
+                    <button type="button" id="send-button" class="bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center">
                         <i class="fas fa-paper-plane"></i>
                     </button>
                 </div>
@@ -227,16 +357,41 @@
 
     <!-- Modal de confirmación -->
     <div id="confirm-modal" class="modal-overlay hidden">
-        <div class="bg-white rounded-lg shadow-xl max-w-md mx-4 p-6">
-            <h2 class="text-lg font-bold mb-4">¿Estás seguro?</h2>
-            <p class="text-gray-600 mb-4">Esta acción eliminará todo el historial del chat.</p>
+        <div class="bg-white rounded-lg shadow-xl max-w-md mx-4 p-4">
+            <h2 class="text-lg font-bold mb-3">¿Estás seguro?</h2>
+            <p class="text-gray-600 mb-3">Esta acción eliminará todo el historial del chat.</p>
             <div class="flex justify-end gap-2">
-                <button id="cancel-clear" class="px-4 py-2 text-gray-600 hover:text-gray-800">Cancelar</button>
-                <button id="confirm-clear" class="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700">Eliminar</button>
+                <button id="cancel-clear" class="px-3 py-2 text-gray-600 hover:text-gray-800">Cancelar</button>
+                <button id="confirm-clear" class="px-3 py-2 bg-red-600 text-white rounded hover:bg-red-700">Eliminar</button>
             </div>
         </div>
     </div>
 
+    <!-- Plantilla para mensajes -->
+    <template id="bot-message-template">
+        <div class="bot-message p-4">
+            <div class="message-content"></div>
+            <div class="message-feedback mt-2 flex items-center justify-end gap-2 text-gray-400">
+                <button class="feedback-button thumbs-up hover:text-green-500 transition-colors duration-200" title="Respuesta útil">
+                    <i class="fas fa-thumbs-up"></i>
+                </button>
+                <button class="feedback-button thumbs-down hover:text-red-500 transition-colors duration-200" title="Respuesta no útil">
+                    <i class="fas fa-thumbs-down"></i>
+                </button>
+                <button class="feedback-button report hidden hover:text-yellow-500 transition-colors duration-200" title="Reportar respuesta">
+                    <i class="fas fa-flag"></i>
+                </button>
+            </div>
+            <div class="feedback-form hidden mt-2 p-2 bg-gray-50 rounded-md">
+                <textarea placeholder="Cuéntanos más sobre tu experiencia (opcional)" class="feedback-comment w-full p-2 border rounded-md text-sm"></textarea>
+                <div class="flex justify-end mt-2">
+                    <button class="feedback-cancel px-2 py-1 text-sm text-gray-600 mr-2">Cancelar</button>
+                    <button class="feedback-submit px-2 py-1 text-sm bg-blue-600 text-white rounded-md">Enviar</button>
+                </div>
+            </div>
+        </div>
+    </template>
+
     <script src="{{ url_for('static', path='/js/chat.js') }}"></script>
 </body>
-</html> 
+</html>

@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi import HTTPException
 import uvicorn
 from app.services.azure_search_service import AzureSearchService
 from typing import List
@@ -22,6 +23,12 @@ import re
 from openai import OpenAI
 from app.hotfix import chat_endpoint as hotfix_chat
 from app.standalone import router as standalone_router
+import uuid
+from datetime import datetime
+from fastapi import Depends
+from app.models.feedback_models import Feedback
+import json
+from pathlib import Path
 
 # Configurar logging
 logging.basicConfig(
@@ -31,6 +38,17 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout)
     ]
 )
+
+# Configurar un logger específico para feedback
+feedback_logger = logging.getLogger("feedback")
+feedback_logger.setLevel(logging.INFO)
+
+# Crear un manejador de archivo para guardar el feedback
+log_dir = Path("logs")
+log_dir.mkdir(exist_ok=True)
+feedback_handler = logging.FileHandler(log_dir / "feedback.log")
+feedback_handler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+feedback_logger.addHandler(feedback_handler)
 
 # Configurar loggers específicos
 for logger_name in ['azure.core.pipeline.policies.http_logging_policy', 'app.services.azure_search_service']:
@@ -165,6 +183,23 @@ async def general_exception_handler(request: Request, exc: Exception):
             "detail": str(exc) if not os.getenv("PRODUCTION") else "Contacte con el administrador"
         }
     )
+    
+@app.post("/api/feedback")
+async def submit_feedback(feedback_data: dict):
+    try:
+        # Añadir timestamp
+        feedback_data["timestamp"] = datetime.now().isoformat()
+        
+        # Guardar en archivo de log como JSON
+        feedback_logger.info(json.dumps(feedback_data))
+        
+        # Log normal para monitoreo
+        logger.info(f"Feedback recibido: Rating={feedback_data.get('rating')}, Comment={feedback_data.get('comment', '')[:30]}")
+        
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Error al procesar feedback: {str(e)}")
+        raise HTTPException(status_code=500, detail="Error al procesar feedback")
 
 if __name__ == "__main__":
     # Determinar el puerto - Azure App Service usa la variable WEBSITES_PORT
