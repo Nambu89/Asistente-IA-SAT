@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "svaniano"
+name = "svania"
 version = "1.0.0"
 description = "Asistente técnico especializado en productos del Grupo SWAN"
 requires-python = ">=3.8"

@@ -1,6 +1,22 @@
 version: '3'
 services:
   web:
-    image: svaniaregistry.azurecr.io/svania:v1.0
+    image: svaniaregistry.azurecr.io/svania:v1.1
     ports:
       - "8000:8000"
+    environment:
+      - NODE_ENV=production
+      - WEBSITES_PORT=8000
+      - WEBSITE_SITE_NAME=svania
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s

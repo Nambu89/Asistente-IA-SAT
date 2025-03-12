@@ -8,7 +8,7 @@ sys.path.insert(0, str(root_dir))
 os.environ["PYTHONPATH"] = str(root_dir)
 
 import logging
-from fastapi import FastAPI, Request, File, UploadFile, Form, HTTPException
+from fastapi import FastAPI, Request, File, UploadFile, Form, HTTPException, Response
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -62,12 +62,14 @@ app.add_middleware(
     allowed_hosts=[
         "localhost",
         "127.0.0.1",
-        "svania.azurewebsites.net",  # Dominio de Azure
-        "b2b.gruposvan.com",         # Dominio del B2B
-        "*"                            # Permitir todos en desarrollo
+        "svania.azurewebsites.net",
+        "b2b.gruposvan.com",
+        "*"
     ] if not os.getenv("PRODUCTION", False) else [
-        "svanartificialintelligence.azurewebsites.net",  # Solo dominios específicos en producción
-        "b2b.gruposvan.com"
+        "svanartificialintelligence.azurewebsites.net",
+        "svania.azurewebsites.net",  # Añadido el dominio actual
+        "b2b.gruposvan.com",
+        "*"  # Temporalmente permite todos para diagnosticar
     ]
 )
 
@@ -136,14 +138,9 @@ async def list_all_documents():
         logger.error(f"Error listing documents: {str(e)}", exc_info=True)
         return {"error": str(e)}
 
-@app.get("/health")
-async def health_check():
-    """Endpoint para health check"""
-    return {
-        "status": "healthy",
-        "version": "1.0.0",
-        "environment": "production" if os.getenv("PRODUCTION") else "development"
-    }
+@app.get('/health')
+def health_check():
+    return 'OK', 200
 
 # Manejadores de errores personalizados
 @app.exception_handler(HTTPException)
