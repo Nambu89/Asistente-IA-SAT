@@ -4,49 +4,140 @@ import sys
 from pathlib import Path
 import logging
 import re
-from fastapi import Form, File, UploadFile, Request
+import json
+import secrets
+from fastapi import Form, File, UploadFile, Request, Cookie, Depends
 from fastapi.responses import JSONResponse
 from openai import OpenAI
 from app.services.azure_search_service import AzureSearchService
 from app.core.settings import Settings
+import redis
+from typing import Optional
 
 # Configuración
 settings = Settings()
 openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+
+# Configuración de Redis (ajusta estos parámetros según tu entorno)
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
+REDIS_SSL = os.getenv("REDIS_SSL", "False").lower() == "true"
+
+# Configuración de la sesión
+SESSION_EXPIRY = 86400 * 7  # 1 semana en segundos
+
+# Inicializar cliente Redis
+try:
+    redis_client = redis.Redis(
+        host=REDIS_HOST,
+        port=REDIS_PORT,
+        password=REDIS_PASSWORD,
+        ssl=REDIS_SSL,
+        decode_responses=True
+    )
+    redis_client.ping()  # Verificar conexión
+    redis_available = True
+    logging.info("Conexión a Redis establecida correctamente")
+except Exception as e:
+    logging.error(f"Error al conectar con Redis: {str(e)}")
+    logging.warning("Utilizando almacenamiento en memoria como fallback")
+    redis_available = False
 
 # Configurar logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-# Historial de conversación para mantener contexto
+# Historial de conversación para mantener contexto (fallback si Redis no está disponible)
 conversation_history = {}
+
+async def get_session_id(request: Request):
+    """
+    Obtiene o crea un identificador de sesión para el usuario.
+    Busca primero en cookies, luego crea uno nuevo si es necesario.
+    """
+    session_cookie = request.cookies.get("svan_session")
+    
+    if session_cookie:
+        logger.info(f"Usando session_id existente de cookie: {session_cookie[:8]}...")
+        return session_cookie
+    
+    # Si no hay cookie, creamos un nuevo ID de sesión
+    new_session_id = f"session_{secrets.token_hex(16)}"
+    logger.info(f"Creando nuevo session_id: {new_session_id[:8]}...")
+    
+    return new_session_id
+
+async def get_conversation_history(session_id: str):
+    """
+    Recupera el historial de conversación desde Redis o memoria.
+    """
+    if redis_available:
+        try:
+            # Intentar obtener datos de Redis
+            history_key = f"svan:chat:{session_id}"
+            data = redis_client.get(history_key)
+            
+            if data:
+                return json.loads(data)
+        except Exception as e:
+            logger.error(f"Error recuperando datos de Redis: {str(e)}")
+    
+    # Fallback a memoria o inicializar nuevo historial
+    if session_id not in conversation_history:
+        conversation_history[session_id] = {
+            "current_model": None,
+            "messages": []
+        }
+    
+    return conversation_history[session_id]
+
+async def save_conversation_history(session_id: str, history_data):
+    """
+    Guarda el historial de conversación en Redis y respaldo en memoria.
+    """
+    # Siempre actualizamos la copia en memoria como fallback
+    conversation_history[session_id] = history_data
+    
+    if redis_available:
+        try:
+            # Guardar en Redis con expiración
+            history_key = f"svan:chat:{session_id}"
+            redis_client.set(
+                history_key,
+                json.dumps(history_data),
+                ex=SESSION_EXPIRY
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Error guardando datos en Redis: {str(e)}")
+            return False
+    
+    return True
 
 async def chat_endpoint(request: Request = None, message: str = Form(None), attachments: list[UploadFile] = File(None)):
     """
     Hotfix para el endpoint de chat que asegura enviar el manual completo a OpenAI
+    y mantiene el historial de conversación en almacenamiento persistente.
     """
     try:
+        # Respuesta inicial si no hay mensaje
         if not message:
             return {"response": "¡Hola! Soy el Asistente Técnico de SVAN. ¿En qué puedo ayudarte hoy?"}
             
         logger.info(f"Mensaje recibido: {message}")
         
-        # Obtener una identificación única para la sesión
-        session_id = "default_session"
-        if request:
-            client_host = request.client.host
-            user_agent = request.headers.get("user-agent", "")
-            session_id = f"{client_host}_{user_agent[:20]}"
+        # Obtener o generar ID de sesión
+        session_id = await get_session_id(request) if request else "default_session"
         
-        if session_id not in conversation_history:
-            conversation_history[session_id] = {
-                "current_model": None,
-                "messages": []
-            }
+        # Recuperar historial para esta sesión
+        session_data = await get_conversation_history(session_id)
+        
+        # Crear una respuesta que incluirá la cookie de sesión
+        json_response = None
         
         # Buscar patrones de modelo (letras seguidas de números)
-        # Patrón más específico para modelos
         models = re.findall(r'[SWAH][A-Z0-9]{2,}', message.upper())
         logger.info(f"Modelos detectados: {models}")
         
@@ -57,11 +148,11 @@ async def chat_endpoint(request: Request = None, message: str = Form(None), atta
         # Si se detecta un modelo en este mensaje, actualizamos el modelo actual
         if filtered_models:
             model = filtered_models[0]
-            conversation_history[session_id]["current_model"] = model
+            session_data["current_model"] = model
             logger.info(f"Modelo actualizado a: {model}")
         else:
             # Si no se detecta un modelo, usamos el último conocido
-            model = conversation_history[session_id]["current_model"]
+            model = session_data["current_model"]
             logger.info(f"Usando modelo previo: {model}")
         
         # Si no hay modelo (ni en este mensaje ni en mensajes anteriores)
@@ -76,16 +167,33 @@ async def chat_endpoint(request: Request = None, message: str = Form(None), atta
                 logger.info("Detectada consulta técnica sin modelo específico")
                 
                 # Guardar este mensaje en el historial
-                conversation_history[session_id]["messages"].append({"role": "user", "content": message})
+                session_data["messages"].append({"role": "user", "content": message})
                 
                 response = "Para poder ayudarte con ese problema técnico, necesito saber el modelo específico del producto. Los modelos comienzan con S (SVAN), W (WONDER), A (ASPES) o H (HYUNDAI)."
                 
-                conversation_history[session_id]["messages"].append({"role": "assistant", "content": response})
-                logger.info("Solicitando modelo para la consulta técnica")
-                return {"response": response}
+                session_data["messages"].append({"role": "assistant", "content": response})
+                
+                # Guardar el historial actualizado
+                await save_conversation_history(session_id, session_data)
+                
+                # Crear respuesta con cookie
+                json_response = {"response": response}
+                if request:
+                    response_obj = JSONResponse(content=json_response)
+                    response_obj.set_cookie(key="svan_session", value=session_id, max_age=SESSION_EXPIRY, httponly=True, samesite="lax")
+                    return response_obj
+                return json_response
             
-            # Para conversaciones generales
-            return {"response": "Por favor, indícame el modelo específico del producto sobre el que necesitas información. Los modelos comienzan con S (SVAN), W (WONDER), A (ASPES) o H (HYUNDAI)."}
+            # Para conversaciones generales sin modelo
+            basic_response = "Por favor, indícame el modelo específico del producto sobre el que necesitas información. Los modelos comienzan con S (SVAN), W (WONDER), A (ASPES) o H (HYUNDAI)."
+            
+            # Crear respuesta con cookie
+            json_response = {"response": basic_response}
+            if request:
+                response_obj = JSONResponse(content=json_response)
+                response_obj.set_cookie(key="svan_session", value=session_id, max_age=SESSION_EXPIRY, httponly=True, samesite="lax")
+                return response_obj
+            return json_response
         
         # Inicializar servicio de búsqueda
         search_service = AzureSearchService()
@@ -94,12 +202,24 @@ async def chat_endpoint(request: Request = None, message: str = Form(None), atta
         manual = await search_service.get_manual_by_model(model)
         
         if not manual:
-            return {"response": f"Lo siento, no he encontrado un manual para el modelo {model}. Por favor, verifica que el código sea correcto."}
+            error_response = f"Lo siento, no he encontrado un manual para el modelo {model}. Por favor, verifica que el código sea correcto."
+            json_response = {"response": error_response}
+            if request:
+                response_obj = JSONResponse(content=json_response)
+                response_obj.set_cookie(key="svan_session", value=session_id, max_age=SESSION_EXPIRY, httponly=True, samesite="lax")
+                return response_obj
+            return json_response
             
         # Asegurar que tenemos contenido
         content = manual.get('content')
         if not content:
-            return {"response": f"He encontrado el manual para {model}, pero no contiene información. Por favor, contacta con soporte técnico."}
+            error_response = f"He encontrado el manual para {model}, pero no contiene información. Por favor, contacta con soporte técnico."
+            json_response = {"response": error_response}
+            if request:
+                response_obj = JSONResponse(content=json_response)
+                response_obj.set_cookie(key="svan_session", value=session_id, max_age=SESSION_EXPIRY, httponly=True, samesite="lax")
+                return response_obj
+            return json_response
             
         # Log del contenido para verificación
         logger.info(f"Contenido recuperado, longitud: {len(content)} caracteres")
@@ -200,7 +320,9 @@ INSTRUCCIONES CRÍTICAS:
    - Busca y lista TODOS los códigos de error mencionados en el manual.
    - Incluye las descripciones EXACTAS de cada código.
 5. {problem_focus}
-6. Usa ÚNICAMENTE información del manual - NO INVENTES ni añadas información que no esté explícitamente en el documento.
+6. IMPORTANTE: Recuerda los detalles de la conversación anterior para mantener el contexto. Si el usuario ya ha mencionado un problema o información técnica, tómalo en cuenta.
+7. Si el usuario pregunta sobre un tema técnico o valor específico (como "valor de NTC"), encuentra esta información en el manual y responde con precisión.
+8. Usa ÚNICAMENTE información del manual - NO INVENTES ni añadas información que no esté explícitamente en el documento.
 
 MANUAL TÉCNICO COMPLETO:
 {content}"""
@@ -214,8 +336,8 @@ MANUAL TÉCNICO COMPLETO:
         # Asegurar que sabemos el tamaño exacto
         logger.info(f"Tamaño del contexto final enviado: {len(full_manual_context)} caracteres")
         
-        # Obtener historial de conversación reciente
-        recent_history = conversation_history[session_id]["messages"][-4:] if conversation_history[session_id]["messages"] else []
+        # Obtener historial de conversación reciente - AUMENTADO a 10 mensajes
+        recent_history = session_data["messages"][-10:] if session_data["messages"] else []
         
         # Construir mensajes
         messages = [
@@ -232,7 +354,7 @@ MANUAL TÉCNICO COMPLETO:
         messages.append({"role": "user", "content": message})
         
         # Llamar a OpenAI con modelo más potente
-        logger.info("Enviando solicitud a OpenAI con modelo gpt-4o...")
+        logger.info(f"Enviando solicitud a OpenAI con modelo gpt-4o y {len(messages)} mensajes...")
         response_openai = openai_client.chat.completions.create(
             model="gpt-4o",  # Usar modelo completo, no mini
             messages=messages,
@@ -245,15 +367,28 @@ MANUAL TÉCNICO COMPLETO:
         logger.info(f"Respuesta generada: {len(response)} caracteres")
         
         # Actualizar historial de conversación
-        conversation_history[session_id]["messages"].append({"role": "user", "content": message})
-        conversation_history[session_id]["messages"].append({"role": "assistant", "content": response})
+        session_data["messages"].append({"role": "user", "content": message})
+        session_data["messages"].append({"role": "assistant", "content": response})
         
-        # Limitar tamaño del historial (mantener últimos 10 mensajes)
-        if len(conversation_history[session_id]["messages"]) > 10:
-            conversation_history[session_id]["messages"] = conversation_history[session_id]["messages"][-10:]
+        # Limitar tamaño del historial (mantener últimos 20 mensajes - AUMENTADO)
+        if len(session_data["messages"]) > 20:
+            session_data["messages"] = session_data["messages"][-20:]
         
-        return {"response": response}
+        # Guardar el historial actualizado
+        await save_conversation_history(session_id, session_data)
+        
+        # Crear respuesta con cookie
+        json_response = {"response": response}
+        if request:
+            response_obj = JSONResponse(content=json_response)
+            response_obj.set_cookie(key="svan_session", value=session_id, max_age=SESSION_EXPIRY, httponly=True, samesite="lax")
+            return response_obj
+        return json_response
         
     except Exception as e:
         logger.error(f"Error procesando consulta: {str(e)}", exc_info=True)
-        return {"response": "Lo siento, ha ocurrido un error. Por favor, intenta nuevamente."}
+        error_response = {"response": "Lo siento, ha ocurrido un error. Por favor, intenta nuevamente."}
+        if request:
+            response_obj = JSONResponse(content=error_response)
+            return response_obj
+        return error_response
