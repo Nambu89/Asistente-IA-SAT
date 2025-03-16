@@ -10,7 +10,8 @@ import redis
 import json
 import secrets
 import os
-from typing import Optional
+from typing import Optional, List, Dict, Any
+import time
 
 # Configuración
 settings = Settings()
@@ -56,6 +57,9 @@ router = APIRouter()
 # Historial de conversación para mantener contexto (fallback si Redis no está disponible)
 conversation_history = {}
 
+# Caché de manuales para búsqueda más eficiente
+manual_cache = {}
+
 async def get_session_id(request: Request):
     """
     Obtiene o crea un identificador de sesión para el usuario.
@@ -92,7 +96,10 @@ async def get_conversation_history(session_id: str):
     if session_id not in conversation_history:
         conversation_history[session_id] = {
             "current_model": None,
-            "messages": []
+            "messages": [],
+            "context_summary": "",
+            "last_summary_time": time.time(),
+            "important_details": {}
         }
     
     return conversation_history[session_id]
@@ -119,6 +126,100 @@ async def save_conversation_history(session_id: str, history_data):
             return False
     
     return True
+
+async def generate_context_summary(messages: List[Dict[str, str]]) -> str:
+    """
+    Genera un resumen del contexto de la conversación para ayudar a mantener la coherencia.
+    """
+    if len(messages) < 4:  # Si hay muy pocos mensajes, no es necesario un resumen
+        return ""
+    
+    try:
+        # Extraer los últimos N mensajes para resumir
+        last_messages = messages[-10:] if len(messages) > 10 else messages
+        
+        # Preparar el prompt para el resumen
+        summary_prompt = [
+            {"role": "system", "content": "Eres un asistente que resume contextos de conversación. Crea un resumen conciso de los puntos clave mencionados en la conversación, incluyendo problemas específicos, modelos de productos, síntomas, soluciones discutidas y cualquier otro detalle importante que debería recordarse para mantener la coherencia."},
+            {"role": "user", "content": "Resume esta conversación en un párrafo conciso capturando los detalles más importantes:\n\n" + "\n".join([f"{m['role']}: {m['content']}" for m in last_messages])}
+        ]
+        
+        # Generar el resumen
+        response = openai_client.chat.completions.create(
+            model="gpt-3.5-turbo-16k",  # Modelo más ligero para resumir
+            messages=summary_prompt,
+            max_tokens=300,
+            temperature=0.3
+        )
+        
+        summary = response.choices[0].message.content.strip()
+        logger.info(f"Resumen de contexto generado: {len(summary)} caracteres")
+        return summary
+    except Exception as e:
+        logger.error(f"Error generando resumen de contexto: {str(e)}")
+        return ""  # En caso de error, no usar resumen
+
+async def search_manual_with_semantic(model: str, query: str = None) -> Dict[str, Any]:
+    """
+    Búsqueda mejorada de manuales con capacidades semánticas.
+    Combina la búsqueda exacta por modelo con la búsqueda semántica basada en la consulta del usuario.
+    """
+    # Verificar caché primero
+    cache_key = f"{model}_{query if query else 'default'}"
+    if cache_key in manual_cache:
+        logger.info(f"Usando manual desde caché para {cache_key}")
+        return manual_cache[cache_key]
+    
+    search_service = AzureSearchService()
+    
+    try:
+        # Estrategia 1: Buscar el manual específico por modelo
+        manual = await search_service.get_manual_by_model(model)
+        
+        # Si tenemos una consulta específica y el manual es extenso, también realizar búsqueda semántica
+        if query and manual and len(manual.get('content', '')) > 10000:
+            try:
+                # Buscar secciones relevantes en el contenido del manual basado en la consulta
+                # Esto podría implementarse mediante chunking del contenido y búsqueda semántica
+                # Por simplicidad, aquí usamos un enfoque básico basado en palabras clave
+                
+                # Extraer palabras clave de la consulta
+                keywords = query.lower().split()
+                content = manual['content']
+                
+                # Buscar párrafos relevantes
+                paragraphs = content.split('\n\n')
+                relevant_paragraphs = []
+                
+                for paragraph in paragraphs:
+                    paragraph_lower = paragraph.lower()
+                    relevance_score = sum(1 for keyword in keywords if keyword in paragraph_lower)
+                    if relevance_score > 0:
+                        relevant_paragraphs.append((paragraph, relevance_score))
+                
+                # Ordenar por relevancia
+                relevant_paragraphs.sort(key=lambda x: x[1], reverse=True)
+                
+                # Tomar los top N párrafos más relevantes
+                top_paragraphs = [p[0] for p in relevant_paragraphs[:10]]
+                
+                # Si encontramos párrafos relevantes, añadirlos al inicio del contenido
+                if top_paragraphs:
+                    highlighted_content = "SECCIONES DESTACADAS RELEVANTES A TU CONSULTA:\n\n" + "\n\n".join(top_paragraphs) + "\n\n--- CONTENIDO COMPLETO DEL MANUAL ---\n\n" + content
+                    manual['content'] = highlighted_content
+                    logger.info(f"Contenido enriquecido con {len(top_paragraphs)} párrafos relevantes")
+            except Exception as e:
+                logger.error(f"Error en la búsqueda semántica: {str(e)}")
+                # En caso de error, mantener el contenido original
+        
+        # Guardar en caché
+        if manual:
+            manual_cache[cache_key] = manual
+            
+        return manual
+    except Exception as e:
+        logger.error(f"Error en búsqueda mejorada de manual: {str(e)}")
+        return None
 
 @router.post("/fullchat")
 async def fullchat(request: Request, message: str = Form(None), attachments: list[UploadFile] = File(None)):
@@ -168,16 +269,47 @@ async def fullchat(request: Request, message: str = Form(None), attachments: lis
                 # Si ya teníamos un modelo y es diferente al nuevo, registrar el cambio
                 if model and model != new_model:
                     logger.info(f"Cambiando de modelo: {model} -> {new_model}")
+                    # Guardar este cambio en detalles importantes
+                    if "important_details" not in session_data:
+                        session_data["important_details"] = {}
+                    session_data["important_details"]["previous_model"] = model
                 
                 model = new_model
                 session_data["current_model"] = model
                 logger.info(f"Modelo establecido/actualizado a: {model}")
         
+        # MEJORA 2: Sistema de resumen periódico del contexto
+        # Verificar si es tiempo de generar un nuevo resumen (cada 10 minutos o cada 10 mensajes)
+        current_time = time.time()
+        messages_since_last_summary = len(session_data.get("messages", [])) - (session_data.get("last_summary_message_count", 0) or 0)
+        time_since_last_summary = current_time - session_data.get("last_summary_time", 0)
+        
+        if (messages_since_last_summary >= 10 or time_since_last_summary > 600) and len(session_data.get("messages", [])) >= 6:
+            logger.info("Generando resumen periódico del contexto")
+            context_summary = await generate_context_summary(session_data["messages"])
+            session_data["context_summary"] = context_summary
+            session_data["last_summary_time"] = current_time
+            session_data["last_summary_message_count"] = len(session_data["messages"])
+            logger.info(f"Resumen actualizado: {len(context_summary)} caracteres")
+        
         # Si no hay modelo (ni en este mensaje ni en mensajes anteriores)
         if not model:
+            # Detectar si es una pregunta general que no requiere modelo específico
+            general_question_patterns = [
+                r'temperatura', r'normal', r'recomendada', r'estándar', r'media', 
+                r'consumo', r'ahorro', r'mantenimiento', r'limpieza', 
+                r'general', r'común', r'típico', r'habitual', r'estándar',
+                r'cuánto', r'cuanto', r'cómo', r'como', r'mejor', r'cuál', r'cual',
+                r'diferencia', r'comparativa', r'vida útil', r'duración',
+                r'eficiencia', r'energética', r'consejos', r'tips', r'recomendaciones'
+            ]
+            
+            # Verificar si es una pregunta general sobre electrodomésticos
+            is_general_question = any(re.search(pattern, message.lower()) for pattern in general_question_patterns)
+            
             # Si es un saludo o mensaje inicial
             if any(word.lower() in message.lower() for word in ['hola', 'buenas', 'buenos días', 'buenas tardes', 'buenas noches']):
-                response = "¡Hola! Me alegro de saludarte. Para poder ayudarte mejor, ¿podrías decirme qué modelo de producto estás usando?"
+                response = "¡Hola! Me alegro de saludarte. ¿En qué puedo ayudarte hoy? Puedo responder preguntas generales sobre electrodomésticos o ayudarte con un modelo específico."
                 
                 # Guardar este mensaje en el historial
                 session_data["messages"].append({"role": "user", "content": message})
@@ -193,6 +325,66 @@ async def fullchat(request: Request, message: str = Form(None), attachments: lis
                     response_obj.set_cookie(key="svan_session", value=session_id, max_age=SESSION_EXPIRY, httponly=True, samesite="lax")
                     return response_obj
                 return json_response
+            
+            # Si parece ser una pregunta general sobre electrodomésticos
+            if is_general_question:
+                logger.info("Detectada consulta general sobre electrodomésticos")
+                
+                # Guardar este mensaje en el historial
+                session_data["messages"].append({"role": "user", "content": message})
+                
+                # Preparar mensajes para OpenAI
+                general_messages = [
+                    {"role": "system", "content": settings.SYSTEM_PROMPT},
+                    {"role": "system", "content": "Esta es una pregunta general sobre electrodomésticos que no requiere información específica de un modelo. Proporciona información basada en estándares generales y buenas prácticas del sector. Debes aclarar que se trata de información general y que puede variar según el modelo específico."}
+                ]
+                
+                # Añadir resumen del contexto si existe
+                if session_data.get("context_summary"):
+                    general_messages.append({"role": "system", "content": f"Contexto de la conversación previa: {session_data['context_summary']}"})
+                
+                # Añadir historial reciente
+                recent_history = session_data["messages"][-10:] if session_data["messages"] else []
+                general_messages.extend(recent_history)
+                
+                try:
+                    # Llamar a OpenAI
+                    logger.info(f"Procesando pregunta general con OpenAI: {message}")
+                    response_openai = openai_client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=general_messages,
+                        max_tokens=1000,
+                        temperature=0.7
+                    )
+                    
+                    response = response_openai.choices[0].message.content.strip()
+                    logger.info(f"Respuesta generada para pregunta general: {len(response)} caracteres")
+                    
+                    # Actualizar historial
+                    session_data["messages"].append({"role": "assistant", "content": response})
+                    
+                    # Guardar historial actualizado
+                    await save_conversation_history(session_id, session_data)
+                    
+                    # Crear respuesta con cookie
+                    json_response = {"response": response}
+                    if request:
+                        response_obj = JSONResponse(content=json_response)
+                        response_obj.set_cookie(key="svan_session", value=session_id, max_age=SESSION_EXPIRY, httponly=True, samesite="lax")
+                        return response_obj
+                    return json_response
+                
+                except Exception as e:
+                    logger.error(f"Error procesando pregunta general: {str(e)}", exc_info=True)
+                    response = "Lo siento, ha ocurrido un error al procesar tu pregunta. ¿Podrías intentarlo de nuevo?"
+                    
+                    # Crear respuesta con cookie
+                    json_response = {"response": response}
+                    if request:
+                        response_obj = JSONResponse(content=json_response)
+                        response_obj.set_cookie(key="svan_session", value=session_id, max_age=SESSION_EXPIRY, httponly=True, samesite="lax")
+                        return response_obj
+                    return json_response
             
             # Si el mensaje actual es solo un problema técnico genérico, preguntar por el modelo
             problem_patterns = [
@@ -207,9 +399,6 @@ async def fullchat(request: Request, message: str = Form(None), attachments: lis
                 
                 # Guardar este mensaje en el historial
                 session_data["messages"].append({"role": "user", "content": message})
-                
-                response = "Para poder ayudarte con ese problema técnico, necesito saber el modelo específico del producto. Los modelos comienzan con S (SVAN), W (WONDER), A (ASPES) o H (HYUNDAI)."
-                
                 session_data["messages"].append({"role": "assistant", "content": response})
                 
                 # Guardar el historial actualizado
@@ -223,8 +412,15 @@ async def fullchat(request: Request, message: str = Form(None), attachments: lis
                     return response_obj
                 return json_response
             
-            # Para conversaciones generales sin modelo
-            basic_response = "Me encantaría ayudarte. Para poder darte la información más precisa, ¿podrías indicarme el modelo de tu producto?"
+            # Para otros tipos de conversaciones sin modelo
+            basic_response = "Puedo ayudarte tanto con información general sobre electrodomésticos como con consultas específicas de productos. Si tienes un modelo específico, por favor indícamelo para darte información más precisa."
+            
+            # Guardar mensaje en el historial
+            session_data["messages"].append({"role": "user", "content": message})
+            session_data["messages"].append({"role": "assistant", "content": basic_response})
+            
+            # Guardar el historial actualizado
+            await save_conversation_history(session_id, session_data)
             
             # Crear respuesta con cookie
             json_response = {"response": basic_response}
@@ -234,11 +430,9 @@ async def fullchat(request: Request, message: str = Form(None), attachments: lis
                 return response_obj
             return json_response
         
-        # Inicializar servicio de búsqueda
-        search_service = AzureSearchService()
-        
-        # Buscar el manual
-        manual = await search_service.get_manual_by_model(model)
+        # MEJORA 3: Búsqueda mejorada de manuales con técnicas más sofisticadas
+        # Usar la nueva función de búsqueda semántica que considera la consulta del usuario
+        manual = await search_manual_with_semantic(model, message)
         
         if not manual:
             error_response = f"Lo siento, no he encontrado un manual para el modelo {model}. Por favor, verifica que el código sea correcto."
@@ -248,7 +442,7 @@ async def fullchat(request: Request, message: str = Form(None), attachments: lis
                 response_obj.set_cookie(key="svan_session", value=session_id, max_age=SESSION_EXPIRY, httponly=True, samesite="lax")
                 return response_obj
             return json_response
-            
+        
         # Asegurar que tenemos contenido
         content = manual.get('content')
         if not content:
@@ -432,9 +626,20 @@ MANUAL TÉCNICO COMPLETO:
         messages = [
             {"role": "system", "content": settings.SYSTEM_PROMPT},
             {"role": "system", "content": "IMPORTANTE: Tu nombre es Svania, no Svaniano. Eres el Asistente Técnico de SVAN. Tienes la capacidad de analizar imágenes. Cuando los usuarios pregunten si puedes procesar o analizar imágenes, debes responder que SÍ y explicar tus capacidades de análisis visual."},
-            # CRUCIAL: Envía el manual completo en un único mensaje
-            {"role": "system", "content": full_manual_context}
         ]
+        
+        # Añadir resumen del contexto si existe
+        if session_data.get("context_summary"):
+            messages.append({"role": "system", "content": f"CONTEXTO DE LA CONVERSACIÓN ANTERIOR:\n{session_data['context_summary']}\n\nRecuerda estos detalles al responder al usuario."})
+        
+        # Añadir detalles importantes si existen
+        if session_data.get("important_details"):
+            details_str = "\n".join([f"{k}: {v}" for k, v in session_data["important_details"].items()])
+            if details_str:
+                messages.append({"role": "system", "content": f"DETALLES IMPORTANTES:\n{details_str}"})
+        
+        # CRUCIAL: Envía el manual completo en un único mensaje
+        messages.append({"role": "system", "content": full_manual_context})
         
         # Añadir historial reciente
         messages.extend(recent_history)
@@ -442,13 +647,14 @@ MANUAL TÉCNICO COMPLETO:
         # Añadir el mensaje actual del usuario
         messages.append({"role": "user", "content": message})
         
-        # Llamar a OpenAI con modelo más potente
+        # MEJORA 1: Aumentar la temperatura para las respuestas específicas de modelo
+        # Llamar a OpenAI con modelo más potente y mayor temperatura
         logger.info(f"Enviando solicitud a OpenAI con modelo gpt-4o y {len(messages)} mensajes...")
         response_openai = openai_client.chat.completions.create(
             model="gpt-4o",  # Usar modelo completo, no mini
             messages=messages,
             max_tokens=2000,
-            temperature=0.2,  # Baja temperatura para mayor precisión
+            temperature=0.7,  # AUMENTADO de 0.2 a 0.7 para mayor creatividad y fluidez
         )
         
         # Extraer y retornar la respuesta

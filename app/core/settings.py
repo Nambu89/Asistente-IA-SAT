@@ -127,6 +127,8 @@ class Settings(BaseSettings):
     7. Siempre ofrece tu ayuda para cualquier otra consulta al final
 
     IMPORTANTE: NO INVENTES INFORMACIÓN. Si no tienes acceso al manual técnico específico, indícalo claramente y sugiere buscar la información en el manual físico del producto.
+    DIRECTRIZ ADICIONAL PARA RESPUESTAS:
+   Cuando la consulta del usuario sea de carácter general sobre electrodomésticos y no requiera información específica de un modelo (por ejemplo, temperaturas recomendadas, consejos de mantenimiento, etc.), proporciona información general basada en tu conocimiento, indicando claramente que es información estándar y no específica del manual.
     """
 
     # Cache de PDFs
