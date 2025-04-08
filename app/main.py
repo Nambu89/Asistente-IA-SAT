@@ -20,7 +20,11 @@ import uvicorn
 from app.services.azure_search_service import AzureSearchService
 from typing import List
 import re
-from openai import OpenAI
+# Eliminar la importación de OpenAI
+# from openai import OpenAI
+# Importar servicios de Azure
+from app.services.azure_openai_service import AzureOpenAIService
+from app.services.azure_ai_foundry_service import AzureAIFoundryService
 from app.hotfix import chat_endpoint as hotfix_chat
 from app.standalone import router as standalone_router
 import uuid
@@ -72,7 +76,9 @@ app = FastAPI(
 
 # Configuración
 settings = Settings()
-openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+# Reemplazar OpenAI por servicios de Azure
+azure_openai_service = AzureOpenAIService()
+ai_foundry_service = AzureAIFoundryService()
 
 # Configurar middleware de seguridad
 app.add_middleware(
@@ -158,7 +164,7 @@ async def list_all_documents():
 
 @app.get('/health')
 def health_check():
-    return 'OK', 200
+    return {"status": "OK"}  # Corregido para retornar un diccionario
 
 # Manejadores de errores personalizados
 @app.exception_handler(HTTPException)

@@ -1,6 +1,6 @@
 from pydantic_settings import BaseSettings
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from dotenv import load_dotenv
 import os
 
@@ -8,8 +8,14 @@ import os
 load_dotenv()
 
 class Settings(BaseSettings):
+    # Versión de la aplicación
+    APP_VERSION: str = "1.1.0"
+    
     # OpenAI
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY")
+    OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # Usar GPT-4o-mini por defecto para ahorrar costes
+    MAX_TOKENS: int = int(os.getenv("MAX_TOKENS", "4000"))
+    TEMPERATURE: float = float(os.getenv("TEMPERATURE", "0.7"))
 
     # SharePoint
     SHAREPOINT_URL: str = "https://tef950226415.sharepoint.com"
@@ -23,6 +29,7 @@ class Settings(BaseSettings):
     BASE_DIR: Path = Path(__file__).resolve().parent.parent.parent
     PDF_DIR: Path = BASE_DIR / 'Manuales'
     UPLOAD_DIR: Path = BASE_DIR / "uploads"
+    LOGS_DIR: Path = BASE_DIR / "logs"
 
     # Configuración del chatbot
     SYSTEM_PROMPT: str = """
@@ -39,6 +46,7 @@ class Settings(BaseSettings):
        - Códigos de error
        - Problemas comunes
        - Procedimientos de reparación
+    3. Puedo mostrar imágenes de los manuales técnicos cuando el usuario lo solicite.
 
     NOMENCLATURA DE MODELOS:
     Primera letra = MARCA:
@@ -124,25 +132,51 @@ class Settings(BaseSettings):
        - Identifica cualquier código de error visible
        - Señala daños o anomalías evidentes
        - Menciona el modelo si es visible
-    7. Siempre ofrece tu ayuda para cualquier otra consulta al final
+    7. Si mencionas figuras o diagramas que están en el manual, indica al usuario que puede solicitarte ver esas imágenes
+    8. Siempre ofrece tu ayuda para cualquier otra consulta al final
 
     IMPORTANTE: NO INVENTES INFORMACIÓN. Si no tienes acceso al manual técnico específico, indícalo claramente y sugiere buscar la información en el manual físico del producto.
     DIRECTRIZ ADICIONAL PARA RESPUESTAS:
-   Cuando la consulta del usuario sea de carácter general sobre electrodomésticos y no requiera información específica de un modelo (por ejemplo, temperaturas recomendadas, consejos de mantenimiento, etc.), proporciona información general basada en tu conocimiento, indicando claramente que es información estándar y no específica del manual.
+    Cuando la consulta del usuario sea de carácter general sobre electrodomésticos y no requiera información específica de un modelo (por ejemplo, temperaturas recomendadas, consejos de mantenimiento, etc.), proporciona información general basada en tu conocimiento, indicando claramente que es información estándar y no específica del manual.
     """
 
     # Cache de PDFs
     PDF_CACHE: Dict[str, str] = {}
+    CACHE_EXPIRY: int = int(os.getenv("CACHE_EXPIRY", "86400"))  # 24 horas por defecto
 
     # Azure Cognitive Search
     AZURE_SEARCH_ENDPOINT: str = os.getenv("AZURE_SEARCH_ENDPOINT", "")
-    AZURE_SEARCH_KEY: str = os.getenv("AZURE_SEARCH_KEY", "")
-    AZURE_SEARCH_INDEX_NAME: str = os.getenv("AZURE_SEARCH_INDEX_NAME", "manuales-index")
+    AZURE_SEARCH_KEY: str = os.getenv("AZURE_SEARCH_API_KEY", "")
+    AZURE_SEARCH_INDEX_NAME: str = os.getenv("AZURE_SEARCH_INDEX_NAME", "azureblob-index")
 
     # Azure Blob Storage
     AZURE_STORAGE_CONNECTION_STRING: str = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
     AZURE_STORAGE_CONTAINER_NAME: str = os.getenv("AZURE_STORAGE_CONTAINER_NAME", "manuales")
-
+    
+    # Redis
+    REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
+    REDIS_PORT: int = int(os.getenv("REDIS_PORT", "6379"))
+    REDIS_PASSWORD: str = os.getenv("REDIS_PASSWORD", "")
+    REDIS_SSL: bool = os.getenv("REDIS_SSL", "False").lower() == "true"
+    
+    # Sesiones
+    SESSION_EXPIRY: int = int(os.getenv("SESSION_EXPIRY", "1209600"))  # 2 semanas por defecto
+    CONTEXT_WINDOW_MESSAGES: int = int(os.getenv("CONTEXT_WINDOW_MESSAGES", "15"))  # Mensajes a mantener en contexto
+    
+    # Configuración de la aplicación
+    DEBUG: bool = os.getenv("DEBUG", "False").lower() == "true"
+    ALLOWED_HOSTS: List[str] = os.getenv("ALLOWED_HOSTS", "*").split(",")
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+    
+    # Archivos permitidos
+    ALLOWED_EXTENSIONS: List[str] = [
+        "jpg", "jpeg", "png", "gif", "bmp",  # Imágenes
+        "pdf", "doc", "docx", "txt",  # Documentos
+        "mp4", "avi", "mov", "wmv",  # Videos
+        "mp3", "wav", "m4a"  # Audio
+    ]
+    MAX_FILE_SIZE: int = int(os.getenv("MAX_FILE_SIZE", "10485760"))  # 10MB por defecto
+    
     class Config:
         env_file = '.env'
         env_file_encoding = 'utf-8'
@@ -159,3 +193,4 @@ class Settings(BaseSettings):
         # Asegurar que existen los directorios necesarios
         self.PDF_DIR.mkdir(parents=True, exist_ok=True)
         self.UPLOAD_DIR.mkdir(exist_ok=True)
+        self.LOGS_DIR.mkdir(exist_ok=True)

@@ -4,8 +4,8 @@ from pathlib import Path
 import re
 from fastapi import HTTPException
 from app.core.settings import Settings
-from app.services.azure_search_service import AzureSearchService
-from openai import OpenAI
+from app.services.azure_search_service import AzureSearchService  # Mantener como respaldo
+from app.services.azure_ai_foundry_service import AzureAIFoundryService
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 class ChatService:
     def __init__(self):
         self.settings = Settings()
-        self.client = OpenAI(api_key=self.settings.OPENAI_API_KEY)
-        self.search_service = AzureSearchService()
+        self.ai_foundry = AzureAIFoundryService()
+        self.search_service = AzureSearchService()  # Mantener como respaldo
         self.current_model = None
         self.conversation_history = []
 
@@ -29,13 +29,19 @@ class ChatService:
             if model:
                 self.current_model = model
             
-            # Si tenemos un modelo, buscar en el manual
+            # Preparar contexto para el modelo
+            context = ""
             if self.current_model:
-                manual = await self.search_service.get_manual_by_model(self.current_model)
+                # Intentar buscar información del modelo usando AI Foundry primero
+                manual = await self.ai_foundry.search_manual_by_model(self.current_model)
+                
+                # Si no se encuentra en AI Foundry, intentar con Azure Search (respaldo)
+                if not manual:
+                    manual = await self.search_service.get_manual_by_model(self.current_model)
+                
+                # Construir el contexto si se encontró información
                 if manual and manual.get('content'):
                     brand, product_type = self._get_brand_and_type(self.current_model)
-                    
-                    # Construir el contexto con la información del manual
                     context = f"""Modelo: {self.current_model}
 Marca: {brand if brand else 'Desconocida'}
 Tipo: {product_type if product_type else 'electrodoméstico'}
@@ -50,23 +56,26 @@ Manual técnico:
             # Mantener historial de conversación
             self.conversation_history.append({"role": "user", "content": message})
             
-            # Preparar mensajes para OpenAI
+            # Preparar mensajes para Azure AI Foundry
             messages = [
                 {"role": "system", "content": self.settings.SYSTEM_PROMPT},
                 {"role": "system", "content": context}
             ]
             messages.extend(self.conversation_history[-5:])  # Últimos 5 mensajes
 
-            # Llamar a OpenAI
-            response = self.client.chat.completions.create(
-                model="gpt-4o",
+            # Llamar a Azure AI Foundry con datos del modelo específico
+            assistant_response = await self.ai_foundry.chat_completion_with_data(
                 messages=messages,
-                max_tokens=2000,
-                temperature=0.7
+                query=message,  # Usar el mensaje del usuario como consulta para el índice vectorial
+                model_number=self.current_model,
+                temperature=0.7,
+                max_tokens=2000
             )
+            
+            if not assistant_response:
+                raise HTTPException(status_code=500, detail="No se pudo obtener una respuesta del modelo")
 
-            # Extraer y guardar respuesta
-            assistant_response = response.choices[0].message.content.strip()
+            # Guardar respuesta en el historial
             self.conversation_history.append({"role": "assistant", "content": assistant_response})
 
             return assistant_response
@@ -169,5 +178,5 @@ Manual técnico:
         """
         Procesa un archivo adjunto
         """
-        # Por implementar: procesamiento de archivos adjuntos
-        pass 
+        # Implementación básica
+        pass

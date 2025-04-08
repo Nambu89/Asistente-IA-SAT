@@ -1,0 +1,237 @@
+/* Optimizaciones específicas para dispositivos móviles */
+
+/* Ajustes básicos para dispositivos móviles */
+@media (max-width: 640px) {
+    /* Ajuste de mensajes para ocupar más espacio */
+    .user-message {
+        margin-left: 5% !important;
+        max-width: 90% !important;
+        padding: 0.75rem !important;
+        font-size: 0.95rem !important;
+    }
+    
+    .bot-message {
+        margin-right: 5% !important;
+        max-width: 90% !important;
+        padding: 0.75rem !important;
+        font-size: 0.95rem !important;
+    }
+    
+    /* Mejorar visualización de código */
+    .bot-message pre {
+        font-size: 0.85rem !important;
+        max-width: 100% !important;
+        white-space: pre-wrap !important;
+        overflow-x: auto !important;
+    }
+    
+    /* Ajustes de la interfaz */
+    #chat-container {
+        max-width: 100% !important;
+        margin: 0 !important;
+        height: 100vh !important;
+        border-radius: 0 !important;
+    }
+    
+    /* Header fijo al scrollear */
+    .app-header {
+        position: sticky !important;
+        top: 0 !important;
+        z-index: 10 !important;
+    }
+    
+    /* Barra de entrada fija abajo */
+    .chat-controls {
+        position: sticky !important;
+        bottom: 0 !important;
+        z-index: 10 !important;
+        background-color: inherit !important;
+    }
+    
+    /* Ajustes para el teclado virtual */
+    #user-input {
+        font-size: 16px !important; /* Prevenir zoom en iOS */
+        padding: 0.75rem !important;
+        min-height: 42px !important;
+    }
+    
+    /* Botones más grandes para mejor toque */
+    .action-buttons button {
+        padding: 0.5rem !important;
+        min-width: 40px !important;
+        min-height: 40px !important;
+    }
+    
+    #send-button {
+        min-width: 46px !important;
+        min-height: 42px !important;
+    }
+    
+    /* Prevenir rebote del scroll */
+    html, body {
+        overscroll-behavior: none !important;
+    }
+    
+    /* Margen inferior para mensajes para evitar que queden detrás del teclado */
+    #chat-messages {
+        padding-bottom: 20px !important;
+    }
+    
+    /* Ajuste para imágenes en pantallas pequeñas */
+    .image-container {
+        grid-template-columns: 1fr !important;
+    }
+    
+    /* Ajuste para el visor de imágenes */
+    #image-viewer-img {
+        max-width: 95% !important;
+        max-height: 70vh !important;
+    }
+    
+    /* Ajustar tamaños de imágenes de manual */
+    .manual-image {
+        max-height: 200px !important;
+    }
+}
+
+/* Ajustes específicos para iOS */
+@supports (-webkit-touch-callout: none) {
+    /* iOS only */
+    .chat-controls {
+        padding-bottom: calc(0.5rem + env(safe-area-inset-bottom, 0)) !important;
+    }
+    
+    body {
+        position: fixed !important;
+        width: 100% !important;
+        height: 100% !important;
+        overflow: hidden !important;
+    }
+    
+    #chat-container {
+        overflow-y: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+    }
+}
+
+/* Ajustes para tablets */
+@media (min-width: 641px) and (max-width: 1024px) {
+    .user-message {
+        margin-left: 10% !important;
+        max-width: 85% !important;
+    }
+    
+    .bot-message {
+        margin-right: 10% !important;
+        max-width: 85% !important;
+    }
+    
+    #chat-container {
+        max-width: 90% !important;
+        height: calc(100vh - 20px) !important;
+    }
+    
+    .image-container {
+        grid-template-columns: repeat(2, 1fr) !important;
+    }
+}
+
+/* Optimizaciones para la cámara en dispositivos móviles */
+@media (max-width: 640px) {
+    #camera-preview {
+        padding: 0 !important;
+    }
+    
+    #camera-view {
+        max-height: 80vh !important;
+    }
+    
+    .camera-controls {
+        padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0)) !important;
+    }
+    
+    #capture-photo, #retake-photo, #cancel-photo {
+        padding: 0.75rem 1rem !important;
+        font-size: 0.9rem !important;
+    }
+}
+
+/* Loading indicator optimizations */
+.loading-indicator {
+    display: inline-block !important;
+    position: relative !important;
+    width: 2.5rem !important;
+    height: 2.5rem !important;
+}
+
+.loading-indicator:after {
+    content: "" !important;
+    display: block !important;
+    width: 1.5rem !important;
+    height: 1.5rem !important;
+    margin: 0.5rem !important;
+    border-radius: 50% !important;
+    border: 4px solid currentColor !important;
+    border-color: currentColor transparent currentColor transparent !important;
+    animation: loading-indicator 1.2s linear infinite !important;
+}
+
+@keyframes loading-indicator {
+    0% {
+        transform: rotate(0deg);
+    }
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+/* Transiciones suaves para el tema oscuro/claro */
+body, #chat-container, .user-message, .bot-message, 
+pre, code, input, textarea, .attachment-preview,
+.chat-controls, .bg-white, .bg-gray-50, .bg-gray-100,
+.bg-gray-200, .bg-gray-800, .bg-gray-900, .text-white,
+.text-gray-900, .text-gray-300, .text-gray-700,
+.border-gray-200, .border-gray-700 {
+    transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease !important;
+}
+
+/* Especificaciones adicionales para garantizar la accesibilidad */
+button:focus, input:focus, textarea:focus {
+    outline: 2px solid rgba(59, 130, 246, 0.5) !important;
+    outline-offset: 2px !important;
+}
+
+.dark button:focus, .dark input:focus, .dark textarea:focus {
+    outline-color: rgba(96, 165, 250, 0.5) !important;
+}
+
+/* Asegurar contraste suficiente */
+.dark .text-gray-400 {
+    color: #9ca3af !important; /* Mejorar legibilidad en modo oscuro */
+}
+
+.dark .text-gray-500 {
+    color: #d1d5db !important; /* Mejorar legibilidad en modo oscuro */
+}
+
+/* Mejoras para la experiencia de audio y video */
+audio, video {
+    max-width: 100% !important;
+    border-radius: 8px !important;
+}
+
+/* Animación de aparición mejorada */
+@keyframes fadeInEnhanced {
+    0% {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    100% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.message-appear {
+    animation: fadeInEnhanced 0.3s cubic-bezier(0.25, 0.1, 0.25, 1) !important;
+}

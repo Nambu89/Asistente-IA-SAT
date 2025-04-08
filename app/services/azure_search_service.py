@@ -1,3 +1,8 @@
+"""
+Servicio para interactuar con Azure Cognitive Search.
+Permite buscar y recuperar manuales técnicos e imágenes relacionadas.
+"""
+
 import os
 import logging
 import asyncio
@@ -5,6 +10,7 @@ import re
 from typing import Optional, List, Dict, Any
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
+from azure.search.documents.models import VectorizedQuery
 
 # Configurar logging
 logger = logging.getLogger(__name__)
@@ -23,7 +29,7 @@ class AzureSearchService:
         # Limpiar las comillas que puedan venir en las variables de entorno
         self.endpoint = os.getenv("AZURE_SEARCH_ENDPOINT", "").strip('"')
         self.key = os.getenv("AZURE_SEARCH_API_KEY", "").strip('"')
-        self.index_name = os.getenv("AZURE_SEARCH_INDEX_NAME", "azureblob-index").strip('"')
+        self.index_name = os.getenv("AZURE_SEARCH_INDEX_NAME", "manuales-index").strip('"')
         
         print(f"Endpoint: {self.endpoint}")
         print(f"Index name: {self.index_name}")
@@ -75,7 +81,7 @@ class AzureSearchService:
             all_results = list(self.client.search(
                 search_text=search_text,
                 search_fields=search_fields,
-                select=["metadata_storage_name", "metadata_storage_path", "content", "modelo"],
+                select=["metadata_storage_name", "metadata_storage_path", "content", "modelo", "metadata_storage_size"],
                 top=100,
                 include_total_count=True
             ))
@@ -106,7 +112,8 @@ class AzureSearchService:
                     "name": result.get("metadata_storage_name", "No name"),
                     "modelo": result.get("modelo", "No model"),
                     "content": result.get("content", "No content"),
-                    "path": result.get("metadata_storage_path", "No path")
+                    "path": result.get("metadata_storage_path", "No path"),
+                    "size": result.get("metadata_storage_size", 0)
                 }
                 documents.append(doc)
                 print(f"Documento encontrado: Nombre={doc['name']}, Modelo={doc['modelo']}")
@@ -140,26 +147,6 @@ class AzureSearchService:
             print(f"Modelo normalizado: {model_normalized}")
             logger.info(f"Modelo normalizado: {model_normalized}")
             
-            # Listar todos los documentos para depuración
-            print("\nListando todos los documentos disponibles:")
-            logger.info("Listando todos los documentos disponibles:")
-            all_docs = list(self.client.search(
-                search_text="*",
-                select=["metadata_storage_name", "metadata_storage_path", "content", "modelo"],
-                top=100
-            ))
-            print(f"Total documentos en el índice: {len(all_docs)}")
-            logger.info(f"Total documentos en el índice: {len(all_docs)}")
-            
-            for doc in all_docs:
-                name = doc.get("metadata_storage_name", "No name")
-                modelo = doc.get("modelo", "No model")
-                content_sample = doc.get("content", "")[:200]
-                print(f"- Archivo: {name} -> Modelo extraído: {modelo}")
-                print(f"  Contenido (primeros 200 chars): {content_sample}")
-                logger.info(f"- Archivo: {name} -> Modelo extraído: {modelo}")
-                logger.info(f"  Contenido (primeros 200 chars): {content_sample}")
-            
             # Estrategias de búsqueda
             search_strategies = [
                 # 1. Búsqueda en el campo modelo
@@ -168,7 +155,7 @@ class AzureSearchService:
                     "search": lambda: list(self.client.search(
                         search_text=model_normalized,
                         search_fields=["modelo"],
-                        select=["metadata_storage_name", "metadata_storage_path", "content", "modelo"],
+                        select=["metadata_storage_name", "metadata_storage_path", "content", "modelo", "metadata_storage_size"],
                         top=1
                     ))
                 },
@@ -178,8 +165,18 @@ class AzureSearchService:
                     "search": lambda: list(self.client.search(
                         search_text=model_normalized,
                         search_fields=["metadata_storage_name"],
-                        select=["metadata_storage_name", "metadata_storage_path", "content", "modelo"],
+                        select=["metadata_storage_name", "metadata_storage_path", "content", "modelo", "metadata_storage_size"],
                         top=1
+                    ))
+                },
+                # 3. Búsqueda semántica
+                {
+                    "name": "Búsqueda semántica",
+                    "search": lambda: list(self.client.search(
+                        search_text=f"manual técnico {model_normalized}",
+                        search_mode="all",
+                        select=["metadata_storage_name", "metadata_storage_path", "content", "modelo", "metadata_storage_size"],
+                        top=3
                     ))
                 }
             ]
@@ -193,6 +190,12 @@ class AzureSearchService:
                     logger.info(f"Estrategia #{i} encontró {len(results)} resultados")
                     
                     if results:
+                        # Si encontramos más de un resultado, priorizar el que tenga el modelo exacto
+                        if len(results) > 1:
+                            exact_match = next((r for r in results if r.get("modelo", "").upper() == model_normalized), None)
+                            if exact_match:
+                                results = [exact_match]
+                            
                         for result in results:
                             name = result.get("metadata_storage_name", "No name")
                             modelo = result.get("modelo", "No model")
@@ -211,65 +214,18 @@ class AzureSearchService:
                                 content = re.sub(r' +', ' ', content)  # Reemplazar múltiples espacios con uno solo
                                 content = re.sub(r'^\s+|\s+$', '', content, flags=re.MULTILINE)  # Eliminar espacios al inicio y final de cada línea
                                 
-                                # Intentar recuperar el contenido completo
-                                logger.info(f"Intentando recuperar contenido completo para {name}")
-                                try:
-                                    # Recuperar el documento completo con otra llamada usando el nombre exacto
-                                    full_doc = list(self.client.search(
-                                        search_text=f'"{name}"',  # Búsqueda exacta del nombre
-                                        search_fields=["metadata_storage_name"],
-                                        select=["metadata_storage_name", "content"],
-                                        top=1
-                                    ))
-                                    if full_doc and full_doc[0].get("content"):
-                                        new_content = full_doc[0].get("content")
-                                        # Limpiar también el nuevo contenido
-                                        new_content = re.sub(r'\n\s*\n', '\n\n', new_content)
-                                        new_content = re.sub(r' +', ' ', new_content)
-                                        new_content = re.sub(r'^\s+|\s+$', '', new_content, flags=re.MULTILINE)
-                                        
-                                        if len(new_content) > len(content):
-                                            content = new_content
-                                            logger.info(f"Contenido completo recuperado. Longitud: {len(content)}")
-                                            logger.info(f"Primeros 200 caracteres: {content[:200]}")
-                                            logger.info(f"Últimos 200 caracteres: {content[-200:] if len(content) > 200 else content}")
-                                except Exception as e:
-                                    logger.error(f"Error recuperando contenido completo: {str(e)}")
-                                    
-                                # Verificar si el contenido parece incompleto o tiene demasiados espacios en blanco
-                                if len(content) < 1000 or "..." in content or content.count('\n\n') > 50:
-                                    logger.warning(f"El contenido parece incompleto o tiene demasiados espacios. Longitud: {len(content)}, Líneas vacías: {content.count('\n\n')}")
-                                    # Intentar una búsqueda más agresiva
-                                    try:
-                                        aggressive_search = list(self.client.search(
-                                            search_text=name,
-                                            select=["content"],
-                                            top=1,
-                                            query_type="full"
-                                        ))
-                                        if aggressive_search and aggressive_search[0].get("content"):
-                                            new_content = aggressive_search[0].get("content")
-                                            # Limpiar el contenido agresivo
-                                            new_content = re.sub(r'\n\s*\n', '\n\n', new_content)
-                                            new_content = re.sub(r' +', ' ', new_content)
-                                            new_content = re.sub(r'^\s+|\s+$', '', new_content, flags=re.MULTILINE)
-                                            
-                                            if len(new_content) > len(content):
-                                                content = new_content
-                                                logger.info(f"Contenido recuperado con búsqueda agresiva. Longitud: {len(content)}")
-                                    except Exception as e:
-                                        logger.error(f"Error en búsqueda agresiva: {str(e)}")
-                            
-                            # Usar el primer resultado si el modelo coincide o no está disponible
-                            if not modelo or modelo.upper() == model_normalized:
-                                print(f"¡Coincidencia encontrada o usando primer resultado!")
-                                logger.info(f"¡Coincidencia encontrada o usando primer resultado!")
+                                # Buscar imágenes relacionadas con este manual
+                                image_references = await self.find_images_for_manual(name, model_normalized)
+                                
                                 return {
                                     "name": name,
                                     "modelo": modelo,
                                     "content": content,
-                                    "path": result.get("metadata_storage_path", "No path")
+                                    "path": result.get("metadata_storage_path", "No path"),
+                                    "size": result.get("metadata_storage_size", 0),
+                                    "image_references": image_references
                                 }
+                        
                         # Si no hay coincidencia exacta, usar el primer resultado
                         first_result = results[0]
                         print(f"No se encontró coincidencia exacta, usando el primer resultado")
@@ -278,11 +234,17 @@ class AzureSearchService:
                         print(f"Contenido (primeros 200 chars): {content[:200]}")
                         logger.info(f"Contenido (primeros 200 chars): {content[:200]}")
                         
+                        # Búsqueda de imágenes relacionadas
+                        name = first_result.get("metadata_storage_name", "No name")
+                        image_references = await self.find_images_for_manual(name, model_normalized)
+                        
                         return {
-                            "name": first_result.get("metadata_storage_name", "No name"),
+                            "name": name,
                             "modelo": first_result.get("modelo", "No model"),
                             "content": content,
-                            "path": first_result.get("metadata_storage_path", "No path")
+                            "path": first_result.get("metadata_storage_path", "No path"),
+                            "size": first_result.get("metadata_storage_size", 0),
+                            "image_references": image_references
                         }
                 except Exception as search_error:
                     print(f"Error en estrategia #{i}: {str(search_error)}")
@@ -299,6 +261,142 @@ class AzureSearchService:
             if hasattr(e, 'response') and e.response is not None:
                 print(f"Respuesta del servidor: {e.response.text}")
                 logger.error(f"Respuesta del servidor: {e.response.text}")
+            return None
+
+    async def find_images_for_manual(self, manual_name: str, model_code: str) -> List[Dict[str, Any]]:
+        """
+        Busca imágenes relacionadas con un manual específico.
+        
+        Args:
+            manual_name: Nombre del archivo del manual
+            model_code: Código del modelo del electrodoméstico
+            
+        Returns:
+            Lista de referencias a imágenes encontradas
+        """
+        try:
+            # Extraer la base del nombre del archivo (sin extensión)
+            base_name = os.path.splitext(manual_name)[0]
+            
+            # Buscar documentos que podrían ser imágenes relacionadas con este manual
+            # Primero por el nombre base del manual
+            image_search_results = list(self.client.search(
+                search_text=base_name,
+                search_fields=["metadata_storage_name"],
+                select=["metadata_storage_name", "metadata_storage_path", "metadata_storage_content_type", "metadata_storage_size"],
+                filter="search.ismatch('image/*', 'metadata_content_type')",
+                top=20
+            ))
+            
+            # También buscar por el código del modelo
+            model_image_results = list(self.client.search(
+                search_text=model_code,
+                search_fields=["metadata_storage_name"],
+                select=["metadata_storage_name", "metadata_storage_path", "metadata_storage_content_type", "metadata_storage_size"],
+                filter="search.ismatch('image/*', 'metadata_content_type')",
+                top=20
+            ))
+            
+            # Combinar resultados y eliminar duplicados
+            all_results = image_search_results + model_image_results
+            unique_results = {}
+            for result in all_results:
+                name = result.get("metadata_storage_name", "")
+                if name and name not in unique_results:
+                    unique_results[name] = result
+            
+            # Convertir a lista de referencias de imágenes
+            image_references = []
+            for name, result in unique_results.items():
+                # Extraer información sobre la figura/diagrama del nombre del archivo
+                figure_info = self._extract_figure_info(name)
+                
+                image_references.append({
+                    "reference": figure_info["reference"],
+                    "figure_number": figure_info["figure_number"],
+                    "description": figure_info["description"],
+                    "file_name": name,
+                    "path": result.get("metadata_storage_path", ""),
+                    "content_type": result.get("metadata_storage_content_type", "image/jpeg"),
+                    "size": result.get("metadata_storage_size", 0)
+                })
+            
+            logger.info(f"Encontradas {len(image_references)} imágenes relacionadas con el manual {manual_name}")
+            return image_references
+            
+        except Exception as e:
+            logger.error(f"Error buscando imágenes para manual {manual_name}: {str(e)}")
+            return []
+    
+    def _extract_figure_info(self, file_name: str) -> Dict[str, str]:
+        """
+        Extrae información sobre la figura/diagrama a partir del nombre del archivo
+        """
+        # Patrones comunes en nombres de archivos de imágenes
+        figure_patterns = [
+            (r'fig(?:ura)?[\s_-]*(\d+)', 'Figura {}'),
+            (r'diag(?:rama)?[\s_-]*(\d+)', 'Diagrama {}'),
+            (r'esquema[\s_-]*(\d+)', 'Esquema {}'),
+            (r'imagen[\s_-]*(\d+)', 'Imagen {}'),
+            (r'photo[\s_-]*(\d+)', 'Foto {}'),
+            (r'img[\s_-]*(\d+)', 'Imagen {}')
+        ]
+        
+        lowercase_name = file_name.lower()
+        
+        for pattern, template in figure_patterns:
+            match = re.search(pattern, lowercase_name)
+            if match:
+                figure_number = match.group(1)
+                reference = template.format(figure_number)
+                
+                # Intentar extraer descripción del nombre del archivo
+                desc_match = re.search(r'([a-z]+[_\s-][a-z]+)', lowercase_name.replace(match.group(0), ''))
+                description = desc_match.group(1).replace('_', ' ').replace('-', ' ').strip() if desc_match else "Sin descripción"
+                
+                return {
+                    "reference": reference,
+                    "figure_number": figure_number,
+                    "description": description
+                }
+        
+        # Si no coincide con ningún patrón conocido
+        return {
+            "reference": "Imagen del manual",
+            "figure_number": "N/A",
+            "description": os.path.splitext(file_name)[0].replace('_', ' ').replace('-', ' ')
+        }
+    
+    async def get_image_url(self, image_reference: Dict[str, Any]) -> Optional[str]:
+        """
+        Obtiene la URL de una imagen específica basada en su referencia
+        
+        Args:
+            image_reference: Diccionario con la información de la referencia de la imagen
+            
+        Returns:
+            URL de la imagen o None si no se encuentra
+        """
+        try:
+            path = image_reference.get("path", "")
+            if not path:
+                return None
+            
+            # La URL completa depende de cómo se almacenan las imágenes en Azure Storage
+            # Si el path ya es una URL completa, la devolvemos directamente
+            if path.startswith("http"):
+                return path
+            
+            # Si no, construimos la URL basada en el contenedor de Azure Storage
+            storage_account = self.endpoint.split('.')[0].replace('https://', '')
+            container_name = "manuales"  # Ajustar según tu configuración
+            
+            # Construir URL SAS (si es necesario)
+            # Por ahora, retornamos una URL sin SAS para acceso público
+            return f"https://{storage_account}.blob.core.windows.net/{container_name}/{image_reference['file_name']}"
+            
+        except Exception as e:
+            logger.error(f"Error obteniendo URL para imagen: {str(e)}")
             return None
 
 if __name__ == "__main__":

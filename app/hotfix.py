@@ -1,4 +1,3 @@
-# app/hotfix.py
 import os
 import sys
 from pathlib import Path
@@ -8,7 +7,8 @@ import json
 import secrets
 from fastapi import Form, File, UploadFile, Request, Cookie, Depends
 from fastapi.responses import JSONResponse
-from openai import OpenAI
+from app.services.azure_openai_service import AzureOpenAIService
+from app.services.azure_ai_foundry_service import AzureAIFoundryService
 from app.services.azure_search_service import AzureSearchService
 from app.core.settings import Settings
 import redis
@@ -16,7 +16,8 @@ from typing import Optional
 
 # Configuración
 settings = Settings()
-openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+ai_foundry_service = AzureAIFoundryService()
+search_service = AzureSearchService()  # Mantener como respaldo
 
 # Configuración de Redis (ajusta estos parámetros según tu entorno)
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
@@ -118,8 +119,7 @@ async def save_conversation_history(session_id: str, history_data):
 
 async def chat_endpoint(request: Request = None, message: str = Form(None), attachments: list[UploadFile] = File(None)):
     """
-    Hotfix para el endpoint de chat que asegura enviar el manual completo a OpenAI
-    y mantiene el historial de conversación en almacenamiento persistente.
+    Endpoint de chat que usa Azure AI Foundry con búsqueda de datos integrada
     """
     try:
         # Respuesta inicial si no hay mensaje
@@ -195,186 +195,41 @@ async def chat_endpoint(request: Request = None, message: str = Form(None), atta
                 return response_obj
             return json_response
         
-        # Inicializar servicio de búsqueda
-        search_service = AzureSearchService()
+        # Mantener historial de conversación
+        session_data["messages"].append({"role": "user", "content": message})
         
-        # Buscar el manual
-        manual = await search_service.get_manual_by_model(model)
-        
-        if not manual:
-            error_response = f"Lo siento, no he encontrado un manual para el modelo {model}. Por favor, verifica que el código sea correcto."
-            json_response = {"response": error_response}
-            if request:
-                response_obj = JSONResponse(content=json_response)
-                response_obj.set_cookie(key="svan_session", value=session_id, max_age=SESSION_EXPIRY, httponly=True, samesite="lax")
-                return response_obj
-            return json_response
-            
-        # Asegurar que tenemos contenido
-        content = manual.get('content')
-        if not content:
-            error_response = f"He encontrado el manual para {model}, pero no contiene información. Por favor, contacta con soporte técnico."
-            json_response = {"response": error_response}
-            if request:
-                response_obj = JSONResponse(content=json_response)
-                response_obj.set_cookie(key="svan_session", value=session_id, max_age=SESSION_EXPIRY, httponly=True, samesite="lax")
-                return response_obj
-            return json_response
-            
-        # Log del contenido para verificación
-        logger.info(f"Contenido recuperado, longitud: {len(content)} caracteres")
-        logger.info(f"Primeros 200 caracteres: {content[:200]}")
-        logger.info(f"Últimos 200 caracteres: {content[-200:] if len(content) > 200 else content}")
-            
-        # Determinar marca por la primera letra
-        brand_map = {'A': 'ASPES', 'S': 'SVAN', 'W': 'WONDER', 'H': 'HYUNDAI'}
-        brand = brand_map.get(model[0], 'Desconocida')
-        
-        # Diccionario de prefijos para todos los tipos de producto
-        product_prefixes = {
-            'SGW': 'cocina de gas',
-            'SG': 'cocina de gas',
-            'I': 'inducción',
-            'AI': 'inducción',
-            'SI': 'inducción',
-            'WI': 'inducción',
-            'L': 'lavadora',
-            'LS': 'lavadora secadora',
-            'LCS': 'lavadora carga superior',
-            'C': 'combi/frigorífico',
-            'CV': 'congelador vertical',
-            'CH': 'congelador horizontal',
-            'CVH': 'congelador horeca',
-            'F': 'frigorífico',
-            'FP': 'frigorífico peltier',
-            'H': 'horno',
-            'V': 'vitrocerámica',
-            'M': 'microondas',
-            'MW': 'microondas',
-            'MWI': 'microondas integrado',
-            'K': 'campana',
-            'KG': 'cocina gas',
-            'KV': 'cocina vitrocerámica',
-            'KI': 'cocina integrada',
-            'KMW': 'cocina mixta',
-            'CPD': 'campana decorativa',
-            'CPE': 'campana extraíble',
-            'CPP': 'campana piramidal',
-            'CPT': 'campana tipo t',
-            'CE': 'calentador estanco',
-            'VE': 'ventilación',
-            'CA': 'calefactor',
-            'CR': 'calefactor radiador',
-            'VN': 'vinoteca',
-            'J': 'lavavajillas',
-            'LV': 'lavavajillas',
-            'JI': 'lavavajillas integrado',
-            'T': 'termo',
-            'TV': 'televisor'
-        }
-        
-        # Determinar tipo de producto a partir del prefijo
-        product_type = "electrodoméstico"
-        # Ordenar por longitud del prefijo (más largo primero) para evitar coincidencias parciales
-        sorted_prefixes = sorted(product_prefixes.items(), key=lambda x: len(x[0]), reverse=True)
-        for prefix, type_name in sorted_prefixes:
-            if model.startswith(prefix):
-                product_type = type_name
-                break
-        
-        # Extraer palabras clave del mensaje del usuario para mejor comprensión
-        user_message_lower = message.lower()
-        problem_keywords = {
-            "chispa": "problemas de ignición, encendido o chispas",
-            "no enciende": "problemas de encendido",
-            "llama": "problemas con la llama o quemadores",
-            "gas": "problemas relacionados con gas o fugas",
-            "huele": "problemas de olor a gas u olores extraños",
-            "ruido": "problemas de ruidos extraños",
-            "error": "códigos de error",
-            "fallo": "fallos o averías"
-        }
-        
-        detected_problems = []
-        for keyword, description in problem_keywords.items():
-            if keyword in user_message_lower:
-                detected_problems.append(description)
-        
-        problem_focus = ""
-        if detected_problems:
-            problem_focus = "Específicamente, el usuario está preguntando sobre: " + ", ".join(detected_problems)
-        
-        # MANUAL COMPLETO - Instrucciones mejoradas
-        full_manual_context = f"""Modelo actual: {model}
-Marca: {brand}
-Tipo: {product_type}
-
-INSTRUCCIONES CRÍTICAS:
-1. Eres un asistente técnico especializado. Usa ÚNICAMENTE la información del manual técnico proporcionado a continuación.
-2. DEBES leer y analizar TODO el manual completo que se proporciona a continuación.
-3. ATENCIÓN: Este manual puede contener soluciones para problemas comunes incluso si no están codificados como errores (E1, E2, etc.):
-   - Si el usuario menciona problemas como "no hace chispa", "huele a gas", "no enciende", busca estas palabras clave en el manual.
-   - Busca secciones como "Troubleshooting", "Problemas y soluciones", "Mantenimiento" o similares.
-   - Proporciona soluciones ESPECÍFICAS basadas en el manual para cada problema.
-4. Para códigos de error específicos (si existen en este modelo):
-   - Busca y lista TODOS los códigos de error mencionados en el manual.
-   - Incluye las descripciones EXACTAS de cada código.
-5. {problem_focus}
-6. IMPORTANTE: Recuerda los detalles de la conversación anterior para mantener el contexto. Si el usuario ya ha mencionado un problema o información técnica, tómalo en cuenta.
-7. Si el usuario pregunta sobre un tema técnico o valor específico (como "valor de NTC"), encuentra esta información en el manual y responde con precisión.
-8. Usa ÚNICAMENTE información del manual - NO INVENTES ni añadas información que no esté explícitamente en el documento.
-
-MANUAL TÉCNICO COMPLETO:
-{content}"""
-
-        # Evitar contextos demasiado largos
-        max_context = 100000  # Límite razonable 
-        if len(full_manual_context) > max_context:
-            logger.warning(f"El contexto es muy largo ({len(full_manual_context)} caracteres). Truncando a {max_context}.")
-            full_manual_context = full_manual_context[:max_context]
-        
-        # Asegurar que sabemos el tamaño exacto
-        logger.info(f"Tamaño del contexto final enviado: {len(full_manual_context)} caracteres")
-        
-        # Obtener historial de conversación reciente - AUMENTADO a 10 mensajes
-        recent_history = session_data["messages"][-10:] if session_data["messages"] else []
-        
-        # Construir mensajes
+        # Preparar mensajes para enviar a AI Foundry
         messages = [
             {"role": "system", "content": settings.SYSTEM_PROMPT},
-            {"role": "system", "content": "IMPORTANTE: Tienes la capacidad de analizar imágenes. Cuando los usuarios pregunten si puedes procesar o analizar imágenes, debes responder que SÍ y explicar tus capacidades de análisis visual."},
-            # CRUCIAL: Envía el manual completo en un único mensaje
-            {"role": "system", "content": full_manual_context}
         ]
         
         # Añadir historial reciente
-        messages.extend(recent_history)
+        recent_messages = session_data["messages"][-10:] if len(session_data["messages"]) > 10 else session_data["messages"]
+        messages.extend(recent_messages)
         
-        # Añadir el mensaje actual del usuario
-        messages.append({"role": "user", "content": message})
+        # Llamar a AI Foundry con búsqueda de datos integrada
+        logger.info(f"Consultando Azure AI Foundry para el modelo: {model}")
         
-        # Llamar a OpenAI con modelo más potente
-        logger.info(f"Enviando solicitud a OpenAI con modelo gpt-4o y {len(messages)} mensajes...")
-        response_openai = openai_client.chat.completions.create(
-            model="gpt-4o",  # Usar modelo completo, no mini
+        response = await ai_foundry_service.chat_completion_with_data(
             messages=messages,
-            max_tokens=2000,
-            temperature=0.2,  # Baja temperatura para mayor precisión
+            query=message,
+            model_number=model,
+            temperature=0.7,
+            max_tokens=2000
         )
         
-        # Extraer y retornar la respuesta
-        response = response_openai.choices[0].message.content.strip()
-        logger.info(f"Respuesta generada: {len(response)} caracteres")
-        
-        # Actualizar historial de conversación
-        session_data["messages"].append({"role": "user", "content": message})
+        if not response:
+            error_response = "Lo siento, ha ocurrido un error. Por favor, intenta nuevamente."
+            json_response = {"response": error_response}
+            if request:
+                response_obj = JSONResponse(content=json_response)
+                return response_obj
+            return json_response
+            
+        # Guardar respuesta en el historial
         session_data["messages"].append({"role": "assistant", "content": response})
         
-        # Limitar tamaño del historial (mantener últimos 20 mensajes - AUMENTADO)
-        if len(session_data["messages"]) > 20:
-            session_data["messages"] = session_data["messages"][-20:]
-        
-        # Guardar el historial actualizado
+        # Guardar historial actualizado
         await save_conversation_history(session_id, session_data)
         
         # Crear respuesta con cookie
