@@ -139,15 +139,60 @@
 /* Optimizaciones para la cámara en dispositivos móviles */
 @media (max-width: 640px) {
     #camera-preview {
-        padding: 0 !important;
+        display: flex !important; /* Esto es crucial */
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
+        z-index: 9999 !important; /* Asegurar que esté por encima de todo */
+        position: fixed !important;
+        inset: 0 !important;
+        background-color: rgba(0, 0, 0, 0.9) !important;
     }
     
-    #camera-view {
-        max-height: 80vh !important;
+    #camera-preview.hidden {
+        display: none !important;
     }
+
+    #camera-view {
+        width: 100% !important;
+        height: auto !important;
+        max-height: 70vh !important;
+        object-fit: contain !important;
+    }
+
+    /* Botón de emergencia para cerrar la cámara */
+    #emergency-close-camera {
+        position: absolute !important;
+        top: 20px !important;
+        right: 20px !important;
+        background-color: #ef4444 !important;
+        color: white !important;
+        border-radius: 50% !important;
+        width: 50px !important;
+        height: 50px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        z-index: 10001 !important;
+        cursor: pointer !important;
+    }
+
+    /* Clase para cuando la cámara está activa */
+    .camera-active {
+    overflow: hidden !important;
+}
     
     .camera-controls {
-        padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0)) !important;
+        position: absolute !important;
+        bottom: 30px !important;
+        left: 0 !important;
+        right: 0 !important;
+        padding: 16px !important;
+        background-color: rgba(0, 0, 0, 0.5) !important;
+        display: flex !important;
+        justify-content: center !important;
+        gap: 16px !important;
+        z-index: 10000 !important;
     }
     
     #capture-photo, #retake-photo, #cancel-photo {

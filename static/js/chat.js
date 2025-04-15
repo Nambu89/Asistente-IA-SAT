@@ -57,6 +57,26 @@ document.addEventListener('DOMContentLoaded', function() {
         checkBrowserSupport();
     }
 
+    // Detector global de tecla Escape para cerrar modales y cámara
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            // Si la cámara está abierta
+            if (!cameraPreview.classList.contains('hidden')) {
+                console.log('Escape global - cerrando cámara');
+                stopCamera();
+            }
+            
+            // También cerrar otros modales si están abiertos
+            if (!confirmModal.classList.contains('hidden')) {
+                hideConfirmModal();
+            }
+            
+            if (!imageViewerModal.classList.contains('hidden')) {
+                closeImageViewer();
+            }
+        }
+    });
+
     // Verificar características del navegador
     function checkBrowserSupport() {
         // Verificar soporte para Camera API
@@ -634,6 +654,25 @@ document.addEventListener('DOMContentLoaded', function() {
             };
         } catch (err) {
             console.error('Error al acceder a la cámara:', err);
+
+            // Añadir botón de emergencia para cerrar
+            const emergencyBtn = document.createElement('button');
+            emergencyBtn.id = 'emergency-close-camera';
+            emergencyBtn.innerHTML = '<i class="fas fa-times"></i>';
+            emergencyBtn.addEventListener('click', function() {
+                console.log('Botón de emergencia presionado');
+                stopCamera();
+            });
+
+            cameraPreview.appendChild(emergencyBtn);
+
+            // Añadir listener para tecla Escape
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && !cameraPreview.classList.contains('hidden')) {
+                    console.log('Tecla Escape presionada - cerrando cámara');
+                    stopCamera();
+                }
+            });
             
             // Mensaje de error más detallado para el usuario
             if (err.name === 'NotAllowedError') {
