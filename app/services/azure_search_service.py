@@ -1,50 +1,62 @@
 """
 Servicio para interactuar con Azure Cognitive Search.
-Permite buscar y recuperar manuales técnicos e imágenes relacionadas.
+Permite buscar y recuperar manuales técnicos.
 """
 
 import os
 import logging
 import asyncio
 import re
+import time
 from typing import Optional, List, Dict, Any
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
-from azure.search.documents.models import VectorizedQuery
 
 # Configurar logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-# Asegurar que los logs se muestren en la consola
-handler = logging.StreamHandler()
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-handler.setFormatter(formatter)
-logger.addHandler(handler)
+logger.setLevel(logging.INFO)  # Reducido a INFO para menos verbosidad
 
+# Configurar handler solo si no tiene ya uno
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
+def singleton(cls):
+    """Decorador para implementar el patrón Singleton."""
+    instances = {}
+
+    def get_instance(*args, **kwargs):
+        if cls not in instances:
+            instances[cls] = cls(*args, **kwargs)
+        return instances[cls]
+
+    return get_instance
+
+@singleton
 class AzureSearchService:
+    """
+    Servicio para interactuar con Azure Cognitive Search.
+    Optimizado para minimizar latencia y maximizar el uso de caché.
+    """
+
     def __init__(self):
-        print("\n=== INICIALIZANDO AZURE SEARCH SERVICE ===")
         logger.info("Inicializando AzureSearchService")
-        
         # Limpiar las comillas que puedan venir en las variables de entorno
         self.endpoint = os.getenv("AZURE_SEARCH_ENDPOINT", "").strip('"')
         self.key = os.getenv("AZURE_SEARCH_API_KEY", "").strip('"')
-        self.index_name = os.getenv("AZURE_SEARCH_INDEX_NAME", "manuales-index").strip('"')
-        
-        print(f"Endpoint: {self.endpoint}")
-        print(f"Index name: {self.index_name}")
-        print(f"API Key: {'*' * 5 + self.key[-5:] if self.key else 'No key found'}")
-        
+        self.index_name = os.getenv("AZURE_SEARCH_INDEX_NAME", "azureblob-index").strip('"')
+
         logger.info(f"Endpoint: {self.endpoint}")
         logger.info(f"Index name: {self.index_name}")
         logger.info(f"API Key: {'*' * 5 + self.key[-5:] if self.key else 'No key found'}")
-        
+
         if not self.endpoint or not self.key:
             error_msg = "Azure Search credentials not found in environment variables"
-            print(f"ERROR: {error_msg}")
             logger.error(error_msg)
             raise ValueError(error_msg)
-        
+
         try:
             self.credential = AzureKeyCredential(self.key)
             self.client = SearchClient(
@@ -52,365 +64,191 @@ class AzureSearchService:
                 index_name=self.index_name,
                 credential=self.credential
             )
-            print("AzureSearchService inicializado correctamente")
             logger.info("AzureSearchService inicializado correctamente")
+
+            # Inicializar caché en memoria
+            self.manual_cache = {}
+            self.cache_ttl = 3600  # 1 hora
+            self.last_cache_cleanup = time.time()
+
         except Exception as e:
-            print(f"ERROR inicializando AzureSearchService: {str(e)}")
             logger.error(f"Error inicializando AzureSearchService: {str(e)}")
             if hasattr(e, 'response') and e.response is not None:
-                print(f"Respuesta del servidor: {e.response.text}")
                 logger.error(f"Respuesta del servidor: {e.response.text}")
             raise
 
-    async def search_manuals(self, query: str = None) -> List[Dict[str, Any]]:
+    async def search_manuals(self, query: str = None, limit: int = None) -> List[Dict[str, Any]]:
         """
-        Busca manuales usando Azure Search
+        Busca manuales usando Azure Search con caché para consultas frecuentes.
+        
+        Args:
+            query: Texto de búsqueda opcional
+            limit: Número máximo de resultados a devolver
+            
+        Returns:
+            Lista de documentos encontrados
         """
+        cache_key = f"search_{query}_{limit}"
+        if cache_key in self.manual_cache:
+            cache_entry = self.manual_cache[cache_key]
+            if time.time() - cache_entry['timestamp'] < self.cache_ttl:
+                logger.info(f"Usando caché para búsqueda: {query}")
+                return cache_entry['data']
+
+        start_time = time.time()
         try:
-            print("=== INICIO DE BÚSQUEDA DE MANUALES ===")
-            print(f"Buscando manuales con query: {query}")
             logger.info(f"Buscando manuales con query: {query}")
             
             # Usar el query si está presente, de lo contrario buscar todos los documentos
             search_text = query if query else "*"
+            # Optimizar búsqueda especificando campos relevantes
             search_fields = ["metadata_storage_name", "modelo", "content"] if query else None
             
-            print("Obteniendo documentos del índice...")
-            logger.info("Obteniendo documentos del índice...")
+            # Limitar número de resultados si se especifica
+            top = min(limit, 50) if limit else 50  # Reducido de 100 a 50 para mejorar rendimiento
             
             all_results = list(self.client.search(
                 search_text=search_text,
+                query_type="simple",  # Usar búsqueda simple para mayor velocidad
                 search_fields=search_fields,
                 select=["metadata_storage_name", "metadata_storage_path", "content", "modelo", "metadata_storage_size"],
-                top=100,
+                top=top,
                 include_total_count=True
             ))
             
-            print(f"Total de documentos en el índice: {len(all_results)}")
-            logger.info(f"Total de documentos en el índice: {len(all_results)}")
+            logger.info(f"Total de documentos encontrados: {len(all_results)}")
             
-            # Mostrar los campos disponibles del primer documento
-            if all_results:
-                print("\nPrimer documento encontrado:")
-                logger.info("Primer documento encontrado:")
-                first_doc = all_results[0]
-                for field, value in first_doc.items():
-                    truncated_value = value[:100] if isinstance(value, str) else value
-                    print(f"Campo: {field} = {truncated_value}")
-                    logger.info(f"Campo: {field} = {truncated_value}")
-                # Mostrar específicamente el contenido
-                content_sample = first_doc.get("content", "")[:200]
-                print(f"Contenido (primeros 200 chars): {content_sample}")
-                logger.info(f"Contenido (primeros 200 chars): {content_sample}")
-            
+            # Procesamiento más simplificado para mejorar rendimiento
             documents = []
-            print("\nProcesando documentos:")
-            logger.info("Procesando documentos:")
-            
             for result in all_results:
                 doc = {
-                    "name": result.get("metadata_storage_name", "No name"),
+                    "name": result.get("metadata_storage_name", None),  # Manejar None explícitamente
                     "modelo": result.get("modelo", "No model"),
                     "content": result.get("content", "No content"),
                     "path": result.get("metadata_storage_path", "No path"),
                     "size": result.get("metadata_storage_size", 0)
                 }
                 documents.append(doc)
-                print(f"Documento encontrado: Nombre={doc['name']}, Modelo={doc['modelo']}")
-                logger.info(f"Documento encontrado: Nombre={doc['name']}, Modelo={doc['modelo']}")
-                # Añadir log del contenido para depuración
-                content_sample = doc["content"][:200]
-                print(f"Contenido (primeros 200 chars): {content_sample}")
-                logger.info(f"Contenido (primeros 200 chars): {content_sample}")
             
-            print("=== FIN DE BÚSQUEDA DE MANUALES ===\n")
+            # Almacenar en caché
+            self.manual_cache[cache_key] = {
+                'data': documents,
+                'timestamp': time.time()
+            }
+            
+            # Log de rendimiento
+            elapsed = time.time() - start_time
+            logger.info(f"Búsqueda completada en {elapsed:.2f}s")
+            
             return documents
 
         except Exception as e:
-            print(f"ERROR en search_manuals: {str(e)}")
-            logger.error(f"Error searching manuals: {str(e)}", exc_info=True)
-            if hasattr(e, 'response') and e.response is not None:
-                print(f"Respuesta del servidor: {e.response.text}")
-                logger.error(f"Respuesta del servidor: {e.response.text}")
+            logger.error(f"Error buscando manuales: {str(e)}", exc_info=True)
             return []
 
     async def get_manual_by_model(self, model: str) -> Optional[Dict[str, Any]]:
         """
-        Obtiene un manual específico por modelo, asegurando el contenido completo
+        Obtiene un manual específico por modelo con optimización de caché.
+        
+        Args:
+            model: Código de modelo a buscar
+            
+        Returns:
+            Diccionario con información del manual o None si no se encuentra
         """
+        # Verificar caché
+        cache_key = f"manual_{model.upper().strip()}"
+        if cache_key in self.manual_cache:
+            cache_entry = self.manual_cache[cache_key]
+            if time.time() - cache_entry['timestamp'] < self.cache_ttl:
+                logger.info(f"Usando manual desde caché para {model}")
+                return cache_entry['data']
+        
+        # Limpiar caché antigua cada hora
+        current_time = time.time()
+        if current_time - self.last_cache_cleanup > 3600:
+            self._cleanup_cache()
+            self.last_cache_cleanup = current_time
+        
+        start_time = time.time()
         try:
-            print(f"\n=== BUSCANDO MANUAL PARA MODELO: {model} ===")
             logger.info(f"Buscando manual para modelo: {model}")
             
             # Normalizar el modelo (eliminar espacios y convertir a mayúsculas)
             model_normalized = model.upper().strip()
-            model_with_wildcard = f"{model_normalized}*"  # Permitir coincidencias parciales (por ejemplo, "AI2300 ")
-            print(f"Modelo normalizado: {model_normalized}")
-            logger.info(f"Modelo normalizado: {model_normalized}")
+            model_with_wildcard = f"{model_normalized}*"
             
-            # Estrategias de búsqueda
-            search_strategies = [
-                # 1. Búsqueda en el campo modelo
-                {
-                    "name": "Búsqueda por modelo",
-                    "search": lambda: list(self.client.search(
-                        search_text=model_with_wildcard,  # Usar wildcard para coincidencias parciales
-                        search_fields=["modelo"],
-                        select=["metadata_storage_name", "metadata_storage_path", "content", "modelo"],
-                        top=1
-                    ))
-                },
-                # 2. Búsqueda por nombre del archivo
-                {
-                    "name": "Búsqueda por nombre del archivo",
-                    "search": lambda: list(self.client.search(
-                        search_text=model_with_wildcard,
-                        search_fields=["metadata_storage_name"],
-                        select=["metadata_storage_name", "metadata_storage_path", "content", "modelo"],
-                        top=1
-                    ))
-                },
-                # 3. Búsqueda semántica
-                {
-                    "name": "Búsqueda semántica",
-                    "search": lambda: list(self.client.search(
-                        search_text=f"manual técnico {model_normalized}",
-                        search_mode="all",
-                        select=["metadata_storage_name", "metadata_storage_path", "content", "modelo"],
-                        top=3
-                    ))
-                }
-            ]
-            
-            for i, strategy in enumerate(search_strategies, 1):
-                print(f"\nIntentando estrategia #{i}: {strategy['name']}")
-                logger.info(f"Intentando estrategia #{i}: {strategy['name']}")
-                try:
-                    results = strategy["search"]()
-                    print(f"Estrategia #{i} encontró {len(results)} resultados")
-                    print(f"Resultados crudos: {results}")
-                    logger.info(f"Estrategia #{i} encontró {len(results)} resultados")
-                    logger.info(f"Resultados crudos: {results}")
-                    
-                    if results:
-                        # Si encontramos más de un resultado, priorizar el que tenga el modelo exacto
-                        if len(results) > 1:
-                            exact_match = next(
-                                (r for r in results if r.get("modelo", "").upper().strip() == model_normalized),
-                                None
-                            )
-                            if exact_match:
-                                results = [exact_match]
-                                print(f"Encontrada coincidencia exacta: {exact_match.get('modelo')}")
-                                logger.info(f"Encontrada coincidencia exacta: {exact_match.get('modelo')}")
-                        
-                        for result in results:
-                            name = result.get("metadata_storage_name", "No name")
-                            modelo = result.get("modelo", "No model")
-                            content = result.get("content", "")
-                            print(f"Resultado encontrado: Archivo={name}, Modelo={modelo}")
-                            print(f"Contenido disponible: {'Sí' if content else 'No'}")
-                            print(f"Contenido (primeros 200 chars): {content[:200]}")
-                            logger.info(f"Resultado encontrado: Archivo={name}, Modelo={modelo}")
-                            logger.info(f"Contenido disponible: {'Sí' if content else 'No'}")
-                            logger.info(f"Contenido (primeros 200 chars): {content[:200]}")
-                            
-                            # CRÍTICO: ASEGURAR QUE SE RECUPERE EL CONTENIDO COMPLETO
-                            if content:
-                                # Limpiar el contenido de espacios en blanco excesivos y líneas vacías
-                                content = re.sub(r'\n\s*\n', '\n\n', content)
-                                content = re.sub(r' +', ' ', content)
-                                content = re.sub(r'^\s+|\s+$', '', content, flags=re.MULTILINE)
-                                
-                                # Buscar imágenes relacionadas con este manual
-                                image_references = await self.find_images_for_manual(name, model_normalized)
-                                
-                                return {
-                                    "name": name,
-                                    "modelo": modelo,
-                                    "content": content,
-                                    "path": result.get("metadata_storage_path", "No path"),
-                                    "image_references": image_references
-                                }
-                        
-                        # Si no hay coincidencia exacta, usar el primer resultado
-                        first_result = results[0]
-                        print(f"No se encontró coincidencia exacta, usando el primer resultado")
-                        logger.info(f"No se encontró coincidencia exacta, usando el primer resultado")
-                        content = first_result.get("content", "")
-                        print(f"Contenido (primeros 200 chars): {content[:200]}")
-                        logger.info(f"Contenido (primeros 200 chars): {content[:200]}")
-                        
-                        name = first_result.get("metadata_storage_name", "No name")
-                        image_references = await self.find_images_for_manual(name, model_normalized)
-                        
-                        return {
-                            "name": name,
-                            "modelo": first_result.get("modelo", "No model"),
-                            "content": content,
-                            "path": first_result.get("metadata_storage_path", "No path"),
-                            "image_references": image_references
-                        }
-                except Exception as search_error:
-                    print(f"Error en estrategia #{i}: {str(search_error)}")
-                    logger.error(f"Error en estrategia #{i}: {str(search_error)}", exc_info=True)
-                    continue
-            
-            print(f"\nNo se encontró manual para el modelo: {model}")
-            logger.warning(f"No se encontró manual para el modelo: {model}")
-            return None
-
-        except Exception as e:
-            print(f"Error buscando manual: {str(e)}")
-            logger.error(f"Error buscando manual: {str(e)}", exc_info=True)
-            if hasattr(e, 'response') and e.response is not None:
-                print(f"Respuesta del servidor: {e.response.text}")
-                logger.error(f"Respuesta del servidor: {e.response.text}")
-            return None
-
-    async def find_images_for_manual(self, manual_name: str, model_code: str) -> List[Dict[str, Any]]:
-        """
-        Busca imágenes relacionadas con un manual específico.
-        
-        Args:
-            manual_name: Nombre del archivo del manual
-            model_code: Código del modelo del electrodoméstico
-            
-        Returns:
-            Lista de referencias a imágenes encontradas
-        """
-        try:
-            # Extraer la base del nombre del archivo (sin extensión)
-            base_name = os.path.splitext(manual_name)[0]
-            
-            # Buscar documentos que podrían ser imágenes relacionadas con este manual
-            # Primero por el nombre base del manual
-            image_search_results = list(self.client.search(
-                search_text=base_name,
-                search_fields=["metadata_storage_name"],
-                select=["metadata_storage_name", "metadata_storage_path", "metadata_storage_content_type", "metadata_storage_size"],
-                filter="search.ismatch('image/*', 'metadata_content_type')",
-                top=20
+            # Estrategia optimizada: búsqueda directa en el campo 'modelo' para mayor velocidad
+            results = list(self.client.search(
+                search_text=model_with_wildcard,
+                query_type="simple",  # Usar búsqueda simple para mayor velocidad
+                search_fields=["modelo"],  # Buscar solo en el campo 'modelo'
+                select=["metadata_storage_name", "metadata_storage_path", "content", "modelo"],
+                top=1
             ))
             
-            # También buscar por el código del modelo
-            model_image_results = list(self.client.search(
-                search_text=model_code,
-                search_fields=["metadata_storage_name"],
-                select=["metadata_storage_name", "metadata_storage_path", "metadata_storage_content_type", "metadata_storage_size"],
-                filter="search.ismatch('image/*', 'metadata_content_type')",
-                top=20
-            ))
-            
-            # Combinar resultados y eliminar duplicados
-            all_results = image_search_results + model_image_results
-            unique_results = {}
-            for result in all_results:
-                name = result.get("metadata_storage_name", "")
-                if name and name not in unique_results:
-                    unique_results[name] = result
-            
-            # Convertir a lista de referencias de imágenes
-            image_references = []
-            for name, result in unique_results.items():
-                # Extraer información sobre la figura/diagrama del nombre del archivo
-                figure_info = self._extract_figure_info(name)
-                
-                image_references.append({
-                    "reference": figure_info["reference"],
-                    "figure_number": figure_info["figure_number"],
-                    "description": figure_info["description"],
-                    "file_name": name,
-                    "path": result.get("metadata_storage_path", ""),
-                    "content_type": result.get("metadata_storage_content_type", "image/jpeg"),
-                    "size": result.get("metadata_storage_size", 0)
-                })
-            
-            logger.info(f"Encontradas {len(image_references)} imágenes relacionadas con el manual {manual_name}")
-            return image_references
-            
-        except Exception as e:
-            logger.error(f"Error buscando imágenes para manual {manual_name}: {str(e)}")
-            return []
-    
-    def _extract_figure_info(self, file_name: str) -> Dict[str, str]:
-        """
-        Extrae información sobre la figura/diagrama a partir del nombre del archivo
-        """
-        # Patrones comunes en nombres de archivos de imágenes
-        figure_patterns = [
-            (r'fig(?:ura)?[\s_-]*(\d+)', 'Figura {}'),
-            (r'diag(?:rama)?[\s_-]*(\d+)', 'Diagrama {}'),
-            (r'esquema[\s_-]*(\d+)', 'Esquema {}'),
-            (r'imagen[\s_-]*(\d+)', 'Imagen {}'),
-            (r'photo[\s_-]*(\d+)', 'Foto {}'),
-            (r'img[\s_-]*(\d+)', 'Imagen {}')
-        ]
-        
-        lowercase_name = file_name.lower()
-        
-        for pattern, template in figure_patterns:
-            match = re.search(pattern, lowercase_name)
-            if match:
-                figure_number = match.group(1)
-                reference = template.format(figure_number)
-                
-                # Intentar extraer descripción del nombre del archivo
-                desc_match = re.search(r'([a-z]+[_\s-][a-z]+)', lowercase_name.replace(match.group(0), ''))
-                description = desc_match.group(1).replace('_', ' ').replace('-', ' ').strip() if desc_match else "Sin descripción"
-                
-                return {
-                    "reference": reference,
-                    "figure_number": figure_number,
-                    "description": description
-                }
-        
-        # Si no coincide con ningún patrón conocido
-        return {
-            "reference": "Imagen del manual",
-            "figure_number": "N/A",
-            "description": os.path.splitext(file_name)[0].replace('_', ' ').replace('-', ' ')
-        }
-    
-    async def get_image_url(self, image_reference: Dict[str, Any]) -> Optional[str]:
-        """
-        Obtiene la URL de una imagen específica basada en su referencia
-        
-        Args:
-            image_reference: Diccionario con la información de la referencia de la imagen
-            
-        Returns:
-            URL de la imagen o None si no se encuentra
-        """
-        try:
-            path = image_reference.get("path", "")
-            if not path:
+            if not results:
+                logger.warning(f"No se encontró manual para el modelo: {model}")
                 return None
             
-            # La URL completa depende de cómo se almacenan las imágenes en Azure Storage
-            # Si el path ya es una URL completa, la devolvemos directamente
-            if path.startswith("http"):
-                return path
+            # Procesar resultado
+            result = results[0]
+            name = result.get("metadata_storage_name", None)  # Manejar None explícitamente
+            modelo = result.get("modelo", "No model")
+            content = result.get("content", "")
             
-            # Si no, construimos la URL basada en el contenedor de Azure Storage
-            storage_account = self.endpoint.split('.')[0].replace('https://', '')
-            container_name = "manuales"  # Ajustar según tu configuración
+            if not content:
+                logger.warning(f"No hay contenido disponible para el modelo: {model}")
+                return None
             
-            # Construir URL SAS (si es necesario)
-            # Por ahora, retornamos una URL sin SAS para acceso público
-            return f"https://{storage_account}.blob.core.windows.net/{container_name}/{image_reference['file_name']}"
+            # Limpiar el contenido de espacios en blanco excesivos
+            content = re.sub(r'\n\s*\n', '\n\n', content)
+            content = re.sub(r' +', ' ', content)
+            content = re.sub(r'^\s+|\s+$', '', content, flags=re.MULTILINE)
             
+            manual_data = {
+                "name": name,  # Puede ser None, lo cual es válido ya que no se buscan imágenes
+                "modelo": modelo,
+                "content": content,
+                "path": result.get("metadata_storage_path", "No path")
+            }
+            
+            # Guardar en caché
+            self.manual_cache[cache_key] = {
+                'data': manual_data,
+                'timestamp': time.time()
+            }
+            
+            # Log de rendimiento
+            elapsed = time.time() - start_time
+            logger.info(f"Manual para {model} recuperado en {elapsed:.2f}s")
+            
+            return manual_data
+
         except Exception as e:
-            logger.error(f"Error obteniendo URL para imagen: {str(e)}")
+            logger.error(f"Error buscando manual: {str(e)}", exc_info=True)
             return None
+
+    def _cleanup_cache(self):
+        """Limpia entradas caducadas de la caché"""
+        current_time = time.time()
+        expired_keys = [
+            k for k, v in self.manual_cache.items()
+            if current_time - v['timestamp'] > self.cache_ttl
+        ]
+        for key in expired_keys:
+            del self.manual_cache[key]
+        logger.info(f"Caché limpiada: eliminadas {len(expired_keys)} entradas antiguas")
 
 if __name__ == "__main__":
     # Ejemplo de uso para depuración
     async def main():
+        start = time.time()
         service = AzureSearchService()
         manuals = await service.search_manuals()
         print(f"Manuales encontrados: {len(manuals)}")
         manual = await service.get_manual_by_model("AI2300")
-        print(f"Manual para AI2300: {manual}")
+        print(f"Manual para AI2300: {manual is not None}")
+        print(f"Tiempo total: {time.time() - start:.2f}s")
 
     asyncio.run(main())

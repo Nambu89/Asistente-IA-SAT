@@ -22,29 +22,24 @@ import asyncio
 import random
 import os
 from pathlib import Path
+from retrying import retry
 
 import redis
-from fastapi import APIRouter, Form, File, UploadFile, HTTPException, Request, Depends, Response
+from fastapi import APIRouter, Form, File, UploadFile, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
-from openai import AzureOpenAI
 from PIL import Image
 
 from app.services.azure_search_service import AzureSearchService
+from app.services.azure_ai_foundry_service import AzureAIFoundryService
+from app.services.azure_openai_service import AzureOpenAIService
 from app.core.settings import Settings
 
 # Configuración
 settings = Settings()
 
-# Inicializar cliente de Azure OpenAI
-openai_client = AzureOpenAI(
-    api_key=settings.OPENAI_API_KEY,
-    azure_endpoint=settings.AZURE_OPENAI_ENDPOINT,
-    api_version=settings.AZURE_OPENAI_API_VERSION
-)
-
 # Constantes
 GPT_MODEL = "gpt-4o-mini"
-SMALL_MODEL_FOR_SUMMARIES = "gpt-3.5-turbo"  # Modelo de chat compatible para fallback
+SMALL_MODEL_FOR_SUMMARIES = "gpt-3.5-turbo"
 MAX_TOKENS = 4000
 DEFAULT_TEMPERATURE = 0.7
 SESSION_EXPIRY = 86400 * 14  # 2 semanas en segundos
@@ -83,7 +78,6 @@ try:
         pool.connection_class = redis.SSLConnection
         pool.connection_kwargs.update({
             'ssl_cert_reqs': 'required',
-            # Próximos certificados aquí
         })
     redis_client = redis.Redis(connection_pool=pool)
     redis_client.ping()
@@ -103,6 +97,16 @@ manual_cache = {}
 class SessionManager:
     """Clase para gestionar sesiones y mantener contexto de conversación"""
     
+    @retry(stop_max_attempt_number=3, wait_fixed=2000)
+    def connect_redis(self):
+        return redis.Redis(
+            host=settings.REDIS_HOST,
+            port=settings.REDIS_PORT,
+            password=settings.REDIS_PASSWORD,
+            ssl=settings.REDIS_SSL,
+            decode_responses=True
+        )
+    
     @staticmethod
     async def get_session_id(request: Request) -> str:
         """
@@ -115,7 +119,6 @@ class SessionManager:
             logger.info(f"Usando session_id existente de cookie: {session_cookie[:8]}...")
             return session_cookie
         
-        # Si no hay cookie, creamos un nuevo ID de sesión
         new_session_id = f"session_{secrets.token_hex(16)}"
         logger.info(f"Creando nuevo session_id: {new_session_id[:8]}...")
         
@@ -129,14 +132,12 @@ class SessionManager:
         """
         if redis_available:
             try:
-                # Intentar obtener datos de Redis
                 history_key = f"svan:chat:{session_id}"
                 data = redis_client.get(history_key)
                 
                 if data:
                     try:
                         parsed_data = json.loads(data)
-                        # Verificar que los datos son válidos
                         if isinstance(parsed_data, dict) and "messages" in parsed_data:
                             return parsed_data
                         else:
@@ -145,13 +146,11 @@ class SessionManager:
                         logger.error(f"Error al decodificar JSON de Redis para sesión {session_id[:8]}")
             except Exception as e:
                 logger.error(f"Error recuperando datos de Redis: {str(e)}")
-                # Intentar reconectar en segundo plano
                 try:
                     redis_client.ping()
                 except:
                     pass
         
-        # Fallback a memoria o inicializar nuevo historial
         if session_id not in conversation_history:
             conversation_history[session_id] = {
                 "current_model": None,
@@ -170,29 +169,21 @@ class SessionManager:
         Guarda el historial de conversación en Redis y respaldo en memoria.
         Implementa mecanismos de seguridad y verificación.
         """
-        # Actualizar timestamp de actividad
         history_data["last_active"] = datetime.now().isoformat()
         
-        # Siempre actualizamos la copia en memoria como fallback
         conversation_history[session_id] = history_data
         
         if redis_available:
             try:
-                # Guardar en Redis con expiración
                 history_key = f"svan:chat:{session_id}"
-                
-                # Comprimir contenido antes de guardar si es muy grande
                 history_json = json.dumps(history_data)
-                if len(history_json) > 500000:  # Si es mayor a 500KB
-                    # Conservamos solo los mensajes más recientes
+                if len(history_json) > 500000:
                     if len(history_data.get("messages", [])) > CONTEXT_WINDOW_MESSAGES:
                         history_data["messages"] = history_data["messages"][-CONTEXT_WINDOW_MESSAGES:]
-                        # Generar un resumen del contexto anterior
                         await ConversationHandler.generate_context_summary(history_data["messages"])
                         history_json = json.dumps(history_data)
                         logger.info(f"Historia comprimida a {len(history_json)} bytes para sesión {session_id[:8]}")
                 
-                # Usar pipeline para operaciones atómicas
                 pipe = redis_client.pipeline()
                 pipe.set(history_key, history_json)
                 pipe.expire(history_key, SESSION_EXPIRY)
@@ -201,7 +192,6 @@ class SessionManager:
                 return True
             except Exception as e:
                 logger.error(f"Error guardando datos en Redis: {str(e)}")
-                # Intentar reconectar en segundo plano
                 try:
                     redis_client.ping()
                 except:
@@ -209,7 +199,6 @@ class SessionManager:
                 return False
         
         return True
-
 
 class ConversationHandler:
     """Clase para manejar la lógica de conversación"""
@@ -222,7 +211,6 @@ class ConversationHandler:
         if not message:
             return None
             
-        # Patrones de modelo (S/W/A/H seguido de letras y números)
         patterns = [
             r'[SWAH][A-Z0-9]{2,}[0-9]+(?:[A-Z0-9]*(?:ENF|ENFX|AIDV|AIDVB|DGX|DGN|EX|EDC|PB|DTD|DDTD)?)?'
         ]
@@ -230,9 +218,7 @@ class ConversationHandler:
         for pattern in patterns:
             matches = re.findall(pattern, message.upper())
             if matches:
-                # Filtrar falsos positivos, requiriendo al menos un dígito en el modelo
                 valid_models = [m for m in matches if re.search(r'[0-9]', m)]
-                # Filtrar palabras comunes que podrían coincidir por error
                 common_words = ['HOLA', 'HACE', 'SABE', 'HUELE', 'HABER', 'SOBRE']
                 valid_models = [m for m in valid_models if m not in common_words]
                 
@@ -246,13 +232,10 @@ class ConversationHandler:
         """
         Determina la marca y tipo de producto basado en el modelo.
         """
-        # Mapeo de letras iniciales a marcas
         brand_map = {'A': 'ASPES', 'S': 'SVAN', 'W': 'WONDER', 'H': 'HYUNDAI'}
         brand = brand_map.get(model[0].upper(), 'Desconocida')
         
-        # Diccionario de prefijos para todos los tipos de producto
         product_prefixes = {
-            # Hyundai - Debe ir primero para evitar conflictos
             'HYL': 'lavadora',
             'HA': 'frigorifico americano',
             'HAF': 'air fryer',
@@ -285,7 +268,6 @@ class ConversationHandler:
             'HJI': 'lavavajillas',
             'HV': 'vitrocerámica',
             'HYLA': 'lavavajillas',
-            # Resto de marcas
             'SGW': 'cocina de gas',
             'SG': 'cocina de gas',
             'I': 'inducción',
@@ -327,26 +309,15 @@ class ConversationHandler:
             'TV': 'televisor'
         }
         
-        # Determinar tipo de producto a partir del prefijo
         product_type = "electrodoméstico"
-        
-        # Manejo especial para productos Hyundai
         if model.startswith('HY') or (model.startswith('H') and not model.startswith('HY')):
-            # Para modelos que empiezan con HY, usar los primeros 3 caracteres
-            if model.startswith('HY'):
-                product_code = model[:3]
-            # Para modelos que empiezan con H o HL, usar los primeros 2 caracteres
-            else:
-                product_code = model[:2]
-                
+            product_code = model[:3] if model.startswith('HY') else model[:2]
             for prefix, type_name in product_prefixes.items():
                 if prefix == product_code:
                     product_type = type_name
                     break
         else:
-            # Ordenar por longitud del prefijo (más largo primero) para evitar coincidencias parciales
             sorted_prefixes = sorted(product_prefixes.items(), key=lambda x: len(x[0]), reverse=True)
-            # Proceso normal para otras marcas
             for prefix, type_name in sorted_prefixes:
                 if model.startswith(prefix):
                     product_type = type_name
@@ -369,7 +340,6 @@ class ConversationHandler:
             r'eficiencia', r'energética', r'consejos', r'tips', r'recomendaciones'
         ]
         
-        # Verificar si es una pregunta general sobre electrodomésticos
         return any(re.search(pattern, message.lower()) for pattern in general_question_patterns)
     
     @staticmethod
@@ -407,42 +377,35 @@ class ConversationHandler:
         Genera un resumen del contexto de la conversación para mantener coherencia.
         Usa un modelo más económico para este proceso.
         """
-        if len(messages) < 4:  # Si hay muy pocos mensajes, no es necesario un resumen
+        if len(messages) < 4:
             return ""
         
         try:
-            # Extraer los últimos N mensajes para resumir
-            last_messages = messages[-CONTEXT_WINDOW_MESSAGES:] if len(messages) > CONTEXT_WINDOW_MESSAGES else messages
-            
-            # Preparar el prompt para el resumen
             summary_prompt = [
                 {"role": "system", "content": "Eres un asistente que resume contextos de conversación. Crea un resumen conciso de los puntos clave mencionados en la conversación, incluyendo problemas específicos, modelos de productos, síntomas, soluciones discutidas y cualquier otro detalle importante que debería recordarse para mantener la coherencia."},
-                {"role": "user", "content": "Resume esta conversación en un párrafo conciso capturando los detalles más importantes:\n\n" + "\n".join([f"{m['role']}: {m['content'][:300]}" for m in last_messages])}
+                {"role": "user", "content": "Resume esta conversación en un párrafo conciso capturando los detalles más importantes:\n\n" + "\n".join([f"{m['role']}: {m['content'][:300]}" for m in messages])}
             ]
             
-            # Generar el resumen con un modelo más económico
-            response = openai_client.chat.completions.create(
-                model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,  # Usar el mismo deployment
+            summary = await azure_openai_service.chat_completion(
                 messages=summary_prompt,
                 max_tokens=300,
                 temperature=0.3
             )
             
-            summary = response.choices[0].message.content.strip()
-            logger.info(f"Resumen de contexto generado: {len(summary)} caracteres")
-            return summary
+            if summary:
+                logger.info(f"Resumen de contexto generado: {len(summary)} caracteres")
+                return summary
+            else:
+                logger.warning("No se pudo generar resumen, retornando vacío")
+                return ""
         except Exception as e:
             logger.error(f"Error generando resumen de contexto: {str(e)}")
-            # En caso de error, crear un resumen básico manualmente
             try:
                 topics = set()
                 models = set()
                 for msg in messages[-10:]:
-                    # Extraer modelos
                     model_matches = re.findall(r'[SWAH][A-Z0-9]{2,}[0-9]+', msg.get('content', ''))
                     models.update(model_matches)
-                    
-                    # Extraer palabras clave (simplificado)
                     for keyword in ['error', 'fallo', 'problema', 'no funciona', 'reparación']:
                         if keyword in msg.get('content', '').lower():
                             topics.add(keyword)
@@ -455,8 +418,7 @@ class ConversationHandler:
                     
                 return ". ".join(summary_parts) if summary_parts else ""
             except Exception:
-                return ""  # Fallback final
-
+                return ""
 
 class ManualSearchService:
     """Servicio para buscar y procesar manuales técnicos"""
@@ -472,16 +434,13 @@ class ManualSearchService:
         Búsqueda mejorada de manuales con capacidades semánticas.
         Combina la búsqueda exacta por modelo con la búsqueda semántica basada en la consulta.
         """
-        # Verificar caché primero
         cache_key = f"{model}_{query if query else 'default'}"
         current_time = time.time()
         
-        # Limpiar caché antigua (cada hora)
         if current_time - self.last_cache_cleanup > 3600:
             self._cleanup_cache()
             self.last_cache_cleanup = current_time
         
-        # Verificar si está en caché y no ha expirado
         if cache_key in self.cache:
             cache_entry = self.cache[cache_key]
             if current_time - cache_entry['timestamp'] < self.cache_ttl:
@@ -489,49 +448,37 @@ class ManualSearchService:
                 return cache_entry['data']
         
         try:
-            # Estrategia 1: Buscar el manual específico por modelo
             manual = await self.search_service.get_manual_by_model(model)
             
-            # Si tenemos una consulta específica y el manual es extenso, también realizar búsqueda semántica
             if query and manual and len(manual.get('content', '')) > 5000:
                 try:
-                    # Extraer palabras clave de la consulta
                     keywords = query.lower().split()
                     content = manual['content']
-                    
-                    # Buscar párrafos relevantes
                     paragraphs = content.split('\n\n')
                     relevant_paragraphs = []
                     
                     for paragraph in paragraphs:
-                        if len(paragraph.strip()) < 20:  # Ignorar párrafos muy cortos
+                        if len(paragraph.strip()) < 20:
                             continue
                             
                         paragraph_lower = paragraph.lower()
                         relevance_score = sum(1 for keyword in keywords if keyword in paragraph_lower)
-                        # Dar más peso a párrafos que contienen múltiples palabras clave juntas
                         for i in range(len(keywords)-1):
                             if f"{keywords[i]} {keywords[i+1]}" in paragraph_lower:
                                 relevance_score += 3
                         if relevance_score > 0:
                             relevant_paragraphs.append((paragraph, relevance_score))
                     
-                    # Ordenar por relevancia
                     relevant_paragraphs.sort(key=lambda x: x[1], reverse=True)
-                    
-                    # Tomar los top N párrafos más relevantes
                     top_paragraphs = [p[0] for p in relevant_paragraphs[:10]]
                     
-                    # Si encontramos párrafos relevantes, añadirlos al inicio del contenido
                     if top_paragraphs:
                         highlighted_content = "SECCIONES DESTACADAS RELEVANTES A TU CONSULTA:\n\n" + "\n\n".join(top_paragraphs) + "\n\n--- CONTENIDO COMPLETO DEL MANUAL ---\n\n" + content
                         manual['content'] = highlighted_content
                         logger.info(f"Contenido enriquecido con {len(top_paragraphs)} párrafos relevantes")
                 except Exception as e:
                     logger.error(f"Error en la búsqueda semántica: {str(e)}")
-                    # En caso de error, mantener el contenido original
             
-            # Guardar en caché
             if manual:
                 self.cache[cache_key] = {
                     'data': manual,
@@ -554,7 +501,6 @@ class ManualSearchService:
         
         logger.info(f"Limpieza de caché: eliminadas {len(expired_keys)} entradas antiguas")
 
-
 class FileProcessor:
     """Clase para procesar archivos e imágenes"""
     
@@ -569,27 +515,18 @@ class FileProcessor:
         for attachment in attachments:
             try:
                 if attachment.content_type.startswith('image/'):
-                    # Leer contenido
                     content = await attachment.read()
-                    
-                    # Procesar la imagen con PIL para optimizar tamaño
                     with Image.open(BytesIO(content)) as img:
-                        # Redimensionar si es demasiado grande
                         max_dimension = 800
                         if img.width > max_dimension or img.height > max_dimension:
                             ratio = min(max_dimension / img.width, max_dimension / img.height)
                             new_size = (int(img.width * ratio), int(img.height * ratio))
                             img = img.resize(new_size, Image.LANCZOS)
                         
-                        # Convertir a JPEG con calidad optimizada
                         output = BytesIO()
                         img.convert('RGB').save(output, format='JPEG', quality=75, optimize=True)
                         optimized_content = output.getvalue()
-                        
-                        # Convertir a base64
                         base64_image = base64.b64encode(optimized_content).decode('utf-8')
-                        
-                        # Generar un hash único para la imagen
                         image_hash = hashlib.md5(optimized_content).hexdigest()
                         
                         processed_images.append({
@@ -601,9 +538,7 @@ class FileProcessor:
                         
                         logger.info(f"Imagen {attachment.filename} procesada para análisis ({len(base64_image) // 1024}KB)")
                 elif attachment.content_type == 'application/pdf':
-                    # Aquí podríamos procesar PDFs también
                     logger.info(f"PDF detectado: {attachment.filename} - procesamiento pendiente")
-                    # TODO: Para una implementación futura
             except Exception as e:
                 logger.error(f"Error procesando imagen {attachment.filename}: {str(e)}")
         
@@ -615,12 +550,10 @@ class FileProcessor:
         Guarda un archivo subido en el directorio temporal y retorna su ruta.
         """
         try:
-            # Generar un nombre de archivo único
             ext = Path(upload_file.filename).suffix
             unique_filename = f"{int(time.time())}_{secrets.token_hex(8)}{ext}"
             file_path = TEMP_DIR / unique_filename
             
-            # Guardar el archivo
             async with aiofiles.open(file_path, 'wb') as f:
                 content = await upload_file.read()
                 await f.write(content)
@@ -631,121 +564,10 @@ class FileProcessor:
             logger.error(f"Error guardando archivo {upload_file.filename}: {str(e)}")
             return None
 
-
-class OpenAIService:
-    """Clase para interactuar con Azure OpenAI con manejo de errores mejorado"""
-    
-    def __init__(self):
-        self.client = openai_client
-        self.retry_attempts = 3
-        self.backoff_factor = 1.5
-    
-    async def get_chat_completion(self, 
-                                 messages: List[Dict], 
-                                 model: str = GPT_MODEL,
-                                 max_tokens: int = MAX_TOKENS,
-                                 temperature: float = DEFAULT_TEMPERATURE,
-                                 stream=False) -> Any:
-        """
-        Obtiene una respuesta de Azure OpenAI con reintentos y manejo de errores mejorado.
-        """
-        attempt = 0
-        last_error = None
-        
-        while attempt < self.retry_attempts:
-            try:
-                logger.info(f"Enviando solicitud a Azure OpenAI con {len(messages)} mensajes ({model})")
-                
-                # Estimar tokens de entrada para ajustar max_tokens
-                input_tokens = self._estimate_tokens(messages)
-                if input_tokens > MAX_TOKENS * 0.6:  # Si los tokens de entrada son más del 60% del límite
-                    adjusted_max_tokens = min(max_tokens, MAX_TOKENS - input_tokens)
-                    if adjusted_max_tokens < 100:  # Permitir al menos 100 tokens para la respuesta
-                        adjusted_max_tokens = 100
-                    logger.info(f"Ajustando max_tokens de {max_tokens} a {adjusted_max_tokens} (entrada: {input_tokens})")
-                    max_tokens = adjusted_max_tokens
-                
-                # Preparar parámetros para la llamada a la API
-                params = {
-                    "messages": messages,
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                    "stream": stream
-                }
-                
-                response = self.client.chat.completions.create(
-                    model=settings.AZURE_OPENAI_DEPLOYMENT_NAME,
-                    **params
-                )
-                
-                if stream:
-                    return response
-                else:
-                    return response.choices[0].message.content.strip()
-                
-            except Exception as e:
-                attempt += 1
-                last_error = e
-                wait_time = self.backoff_factor ** attempt
-                
-                error_type = type(e).__name__
-                error_msg = str(e)
-                logger.error(f"Error Azure OpenAI ({error_type}): {error_msg}")
-                
-                if "401" in error_msg:
-                    logger.error("Error de autenticación detectado. No se realizarán más intentos.")
-                    break
-                
-                if "max_tokens" in error_msg:
-                    max_tokens = int(max_tokens * 0.8)
-                    if max_tokens < 100:
-                        max_tokens = 100
-                    logger.info(f"Reduciendo max_tokens a {max_tokens} para siguiente intento")
-                elif "rate limit" in error_msg.lower() or "429" in error_msg:
-                    # Obtener el tiempo de espera del encabezado Retry-After
-                    retry_after = 60  # Valor por defecto
-                    if hasattr(e, 'response') and e.response is not None:
-                        retry_after = int(e.response.headers.get("Retry-After", 60))
-                    wait_time = retry_after + random.uniform(1, 3)
-                    logger.warning(f"Rate limit detectado, esperando {wait_time:.1f}s antes de reintentar")
-                
-                if attempt < self.retry_attempts:
-                    logger.info(f"Reintentando en {wait_time:.1f}s (intento {attempt}/{self.retry_attempts})")
-                    await asyncio.sleep(wait_time)
-                else:
-                    logger.error(f"Agotados todos los intentos. Último error: {error_msg}")
-                    if model != SMALL_MODEL_FOR_SUMMARIES:
-                        try:
-                            logger.info(f"Intentando fallback con modelo {SMALL_MODEL_FOR_SUMMARIES}")
-                            return await self.get_chat_completion(
-                                messages=messages[:3] + messages[-2:],
-                                model=SMALL_MODEL_FOR_SUMMARIES,
-                                max_tokens=max(1000, max_tokens),
-                                temperature=temperature
-                            )
-                        except Exception as fallback_error:
-                            logger.error(f"Error en fallback: {str(fallback_error)}")
-                    return "Lo siento, estoy experimentando dificultades técnicas debido a límites de uso. Por favor, intenta nuevamente en unos minutos."
-    
-    def _estimate_tokens(self, messages: List[Dict]) -> int:
-        """
-        Estima aproximadamente el número de tokens en los mensajes.
-        Esta es una estimación aproximada, no exacta.
-        """
-        # Aproximadamente 4 caracteres por token en promedio
-        chars_per_token = 4
-        total_chars = sum(len(msg.get("content", "")) for msg in messages if isinstance(msg.get("content", ""), str))
-        
-        # Añadir overhead por estructura de mensajes
-        overhead = 8 * len(messages)
-        
-        return total_chars // chars_per_token + overhead
-
-
 # Inicializar servicios
 manual_search_service = ManualSearchService()
-openai_service = OpenAIService()
-
+openai_service = AzureAIFoundryService()
+azure_openai_service = AzureOpenAIService()
 
 @router.post("/fullchat")
 async def fullchat(
@@ -759,38 +581,28 @@ async def fullchat(
     """
     start_time = time.time()
     try:
-        # Obtener o generar ID de sesión
         session_id = await SessionManager.get_session_id(request) if request else "default_session"
-        
-        # Recuperar historial para esta sesión
         session_data = await SessionManager.get_conversation_history(session_id)
             
-        # Log de inicio
         logger.info(f"========== INICIO PROCESAMIENTO /fullchat SESIÓN: {session_id[:8]} ==========")
         
-        # Si no hay mensaje ni archivos, enviar saludo
         if not message and not attachments:
             return {"response": "¡Hola! Soy SvanIA, el Asistente Técnico de SVAN. ¿En qué puedo ayudarte hoy?"}
             
-        # Logging de entradas
         if message:
             logger.info(f"Mensaje recibido: {message[:100]}" + ("..." if len(message) > 100 else ""))
         
         if attachments:
             logger.info(f"Archivos adjuntos recibidos: {[a.filename for a in attachments]}")
         
-        # Crear una respuesta que incluirá la cookie de sesión
         json_response = None
         
-        # 1. Procesar las imágenes para análisis si hay archivos adjuntos
         processed_images = []
         if attachments:
             processed_images = await FileProcessor.process_images_for_analysis(attachments)
         
-        # 2. Extraer el modelo mencionado en el mensaje
         model = None
         if message:
-            # Detectar si el mensaje es una identificación simple del modelo
             if "modelo es el" in message.lower():
                 model_match = re.search(r'(S|W|A|H)\w+', message, re.IGNORECASE)
                 if model_match:
@@ -798,7 +610,6 @@ async def fullchat(
                     session_data["current_model"] = identified_model
                     session_data["messages"].append({"role": "user", "content": message})
                     
-                    # Determinar marca y tipo de producto
                     brand, product_type = await ConversationHandler.get_brand_and_type(identified_model)
                     
                     response = f"Entendido, el modelo {identified_model} de {brand} es un {product_type}. Por favor, indícame específicamente cuál es el problema que estás experimentando, como si hay algún código de error en el display, si no enciende, o cualquier otro detalle que puedas proporcionar. Esto me ayudará a ofrecerte una solución adecuada."
@@ -812,7 +623,6 @@ async def fullchat(
                         return response_obj
                     return json_response
             
-            # Si no es una identificación simple, extraer el modelo normalmente
             extracted_model = await ConversationHandler.extract_model_from_message(message)
             if extracted_model:
                 model = extracted_model
@@ -829,7 +639,6 @@ async def fullchat(
         else:
             model = session_data.get("current_model")
             
-        # 3. Verificar si necesitamos generar un resumen de contexto
         current_time = time.time()
         messages_since_last_summary = len(session_data.get("messages", [])) - (session_data.get("last_summary_message_count", 0) or 0)
         time_since_last_summary = current_time - session_data.get("last_summary_time", 0)
@@ -842,9 +651,7 @@ async def fullchat(
             session_data["last_summary_message_count"] = len(session_data["messages"])
             logger.info(f"Resumen actualizado: {len(context_summary)} caracteres")
         
-        # 4. Determinar si podemos responder sin modelo específico
         if not model:
-            # Si es un saludo
             if message and await ConversationHandler.is_greeting(message):
                 response = "¡Hola! Me alegro de saludarte. ¿En qué puedo ayudarte hoy? Puedo responder preguntas sobre electrodomésticos del Grupo SVAN (SVAN, WONDER, ASPES e HYUNDAI) y ayudarte con problemas técnicos específicos."
                 
@@ -860,7 +667,6 @@ async def fullchat(
                     return response_obj
                 return json_response
             
-            # Si es una solicitud de ayuda
             if message and await ConversationHandler.is_help_request(message):
                 help_response = """
 Soy SvanIA, el Asistente Técnico especializado en productos del Grupo SVAN. Puedo ayudarte de las siguientes maneras:
@@ -890,7 +696,6 @@ Para obtener la mejor ayuda, menciona siempre el modelo específico del electrod
                     return response_obj
                 return json_response
                 
-            # Si parece ser una pregunta general sobre electrodomésticos
             if message and await ConversationHandler.check_general_question(message):
                 logger.info("Detectada consulta general sobre electrodomésticos")
                 
@@ -909,7 +714,7 @@ Para obtener la mejor ayuda, menciona siempre el modelo específico del electrod
                 
                 try:
                     logger.info(f"Procesando pregunta general con OpenAI: {message}")
-                    response = await openai_service.get_chat_completion(
+                    response = await openai_service.chat_completion_with_data(
                         messages=general_messages,
                         max_tokens=1000,
                         temperature=0.7
@@ -939,7 +744,6 @@ Para obtener la mejor ayuda, menciona siempre el modelo específico del electrod
                         return response_obj
                     return json_response
                     
-            # Si tenemos imágenes pero no modelo, intentar hacer análisis de la imagen
             if processed_images and not model:
                 logger.info("Procesando imágenes sin modelo específico")
                 
@@ -978,7 +782,7 @@ Para obtener la mejor ayuda, menciona siempre el modelo específico del electrod
                 
                 try:
                     logger.info(f"Analizando imágenes con OpenAI")
-                    response = await openai_service.get_chat_completion(
+                    response = await openai_service.chat_completion_with_data(
                         messages=image_analysis_messages,
                         max_tokens=1000,
                         temperature=0.7
@@ -1013,7 +817,6 @@ Para obtener la mejor ayuda, menciona siempre el modelo específico del electrod
                         return response_obj
                     return json_response
             
-            # Si no hay modelo, solicitar al usuario que proporcione uno
             if not model:
                 basic_response = "Para poder ayudarte de forma más precisa, necesito conocer el modelo específico de tu electrodoméstico. ¿Podrías indicarme el modelo exacto? Debe comenzar con S (SVAN), W (WONDER), A (ASPES) o H (HYUNDAI)."
                 
@@ -1030,8 +833,8 @@ Para obtener la mejor ayuda, menciona siempre el modelo específico del electrod
                     return response_obj
                 return json_response
         
-        # 5. Buscar el manual cuando tenemos un modelo
-        manual = await manual_search_service.search_manual_with_semantic(model, message)
+        manual_task = manual_search_service.search_manual_with_semantic(model, message)
+        manual = await manual_task
         
         if not manual:
             error_response = f"Lo siento, no he encontrado un manual para el modelo {model}. Por favor, verifica que el código sea correcto o proporciona más detalles sobre el electrodoméstico."
@@ -1047,7 +850,6 @@ Para obtener la mejor ayuda, menciona siempre el modelo específico del electrod
                 return response_obj
             return json_response
         
-        # Asegurar que tenemos contenido
         content = manual.get('content')
         if not content:
             error_response = f"He encontrado la referencia del modelo {model}, pero parece que hay un problema con la documentación técnica. Por favor, contacta con nuestro servicio técnico para que podamos ayudarte mejor."
@@ -1067,11 +869,8 @@ Para obtener la mejor ayuda, menciona siempre el modelo específico del electrod
         logger.info(f"Primeros 200 caracteres: {content[:200]}")
         logger.info(f"Últimos 200 caracteres: {content[-200:] if len(content) > 200 else content}")
             
-        # Determinar marca y tipo de producto
         brand, product_type = await ConversationHandler.get_brand_and_type(model)
         
-        # 6. Construir el contexto del manual con instrucciones mejoradas
-        # Enviar solo un resumen inicial para reducir el uso de tokens
         initial_manual_context = f"""Modelo actual: {model}
 Marca: {brand}
 Tipo: {product_type}
@@ -1095,10 +894,8 @@ El manual técnico para el modelo {model} contiene información sobre seguridad,
 """
         full_manual_context = initial_manual_context
         
-        # 7. Obtener historial de conversación reciente
         recent_history = session_data["messages"][-3:] if session_data["messages"] else []
         
-        # 8. Construir mensajes para OpenAI
         messages = [
             {"role": "system", "content": settings.SYSTEM_PROMPT},
             {"role": "system", "content": "IMPORTANTE: Tu nombre es SvanIA, no Svaniano. Eres el Asistente Técnico de SVAN. Tienes la capacidad de analizar imágenes. Cuando los usuarios pregunten si puedes procesar o analizar imágenes, debes responder que SÍ y explicar tus capacidades de análisis visual."},
@@ -1115,7 +912,6 @@ El manual técnico para el modelo {model} contiene información sobre seguridad,
         messages.append({"role": "system", "content": full_manual_context})
         messages.extend(recent_history)
         
-        # 9. Preparar el mensaje final del usuario
         if processed_images and message:
             user_message_content = [
                 {"type": "text", "text": message},
@@ -1134,34 +930,31 @@ El manual técnico para el modelo {model} contiene información sobre seguridad,
             messages.append({"role": "user", "content": message})
             session_data["messages"].append({"role": "user", "content": message})
         
-        # 10. Llamar a OpenAI con GPT-4o-mini
         logger.info(f"Enviando solicitud a OpenAI con modelo {GPT_MODEL}")
         start_openai_time = time.time()
         
-        # Ajustar max_tokens para permitir respuestas más útiles
-        input_tokens = openai_service._estimate_tokens(messages)
+        input_tokens = await asyncio.get_event_loop().run_in_executor(None, lambda: sum(len(msg.get("content", "")) for msg in messages if isinstance(msg.get("content", ""), str)) // 4 + 8 * len(messages))
         adjusted_max_tokens = min(MAX_TOKENS, 4000 - input_tokens)
         if adjusted_max_tokens < 100:
             adjusted_max_tokens = 100
         logger.info(f"Ajustando max_tokens de {MAX_TOKENS} a {adjusted_max_tokens} (entrada: {input_tokens})")
         
-        response = await openai_service.get_chat_completion(
+        response = await openai_service.chat_completion_with_data(
             messages=messages,
+            query=message,
+            model_number=model,
             max_tokens=adjusted_max_tokens,
             temperature=DEFAULT_TEMPERATURE,
         )
         logger.info(f"Tiempo de respuesta de OpenAI: {time.time() - start_openai_time:.2f}s")
         
-        # 11. Extraer y procesar la respuesta
         if not response:
             response = "Lo siento, ha ocurrido un error al generar la respuesta. Por favor, intenta nuevamente."
             
         logger.info(f"Respuesta generada: {len(response)} caracteres")
         
-        # 12. Actualizar historial de conversación
         session_data["messages"].append({"role": "assistant", "content": response})
         
-        # 13. Limitar tamaño del historial
         if len(session_data["messages"]) > CONTEXT_WINDOW_MESSAGES * 2:
             old_msgs = session_data["messages"][:-CONTEXT_WINDOW_MESSAGES]
             new_summary = await ConversationHandler.generate_context_summary(old_msgs)
@@ -1171,13 +964,10 @@ El manual técnico para el modelo {model} contiene información sobre seguridad,
             session_data["last_summary_time"] = time.time()
             session_data["last_summary_message_count"] = len(session_data["messages"])
         
-        # 14. Guardar el historial actualizado
         await SessionManager.save_conversation_history(session_id, session_data)
         
-        # 15. Crear respuesta con cookie
         json_response = {"response": response}
         
-        # 16. Medir tiempo total de procesamiento
         processing_time = time.time() - start_time
         logger.info(f"Tiempo total de procesamiento: {processing_time:.2f}s")
         
@@ -1197,12 +987,31 @@ El manual técnico para el modelo {model} contiene información sobre seguridad,
         except:
             pass
         
+        00
+        
         error_response = {"response": "Lo siento, ha ocurrido un error al procesar tu consulta. Por favor, intenta nuevamente en unos momentos."}
         if request:
             response_obj = JSONResponse(content=error_response)
             return response_obj
         return error_response
 
+@router.post("/analyze-image")
+async def analyze_image(image: UploadFile = File(...)):
+    """Endpoint para analizar imágenes con OCR."""
+    try:
+        file_path = await FileProcessor.save_uploaded_file(image)
+        if not file_path:
+            raise HTTPException(status_code=500, detail="Error al guardar la imagen")
+        
+        async with aiofiles.open(file_path, 'rb') as f:
+            content = await f.read()
+        result = await asyncio.get_event_loop().run_in_executor(None, lambda: Tesseract.recognize(content, 'spa'))
+        text = result.data.text
+        error_codes = re.findall(r'[EF][0-9]{2,3}', text) or []
+        return {"error_codes": error_codes}
+    except Exception as e:
+        logger.error(f"Error al analizar imagen: {str(e)}")
+        return {"error_codes": []}
 
 # Verificar estado de conexión a Redis de forma periódica
 async def check_redis_connection():
@@ -1218,7 +1027,7 @@ async def check_redis_connection():
             logger.warning("Conexión a Redis perdida, usando almacenamiento en memoria")
             redis_available = False
     
-    asyncio.create_task(asyncio.sleep(60))
+    await asyncio.sleep(60)
     asyncio.create_task(check_redis_connection())
 
 # Iniciar verificación periódica
@@ -1226,27 +1035,8 @@ async def check_redis_connection():
 async def startup_redis_check():
     asyncio.create_task(check_redis_connection())
 
-# Verificar estado de conexión a Redis de forma periódica
-async def check_redis_connection():
-    """Verificar el estado de la conexión a Redis de forma periódica"""
-    global redis_available
-    try:
-        redis_client.ping()
-        if not redis_available:
-            logger.info("Conexión a Redis restaurada")
-            redis_available = True
-    except:
-        if redis_available:
-            logger.warning("Conexión a Redis perdida, usando almacenamiento en memoria")
-            redis_available = False
-    
-    asyncio.create_task(asyncio.sleep(60))
-    asyncio.create_task(check_redis_connection())
-
-# Iniciar verificación periódica
-@router.on_event("startup")
-async def startup_redis_check():
-    asyncio.create_task(check_redis_connection())
+# Verificar estado de conexión a Redis de forma periódica (eliminamos duplicado)
+# El código anterior ya incluía esta función, así que no es necesario repetirla.
 
 # Endpoint de salud
 @router.get("/health")
@@ -1259,7 +1049,12 @@ async def healthcheck():
         # Verificar OpenAI
         openai_status = "OK"
         try:
-            openai_client.models.list(limit=1)
+            response = await azure_openai_service.chat_completion(
+                messages=[{"role": "system", "content": "Test"}],
+                max_tokens=10
+            )
+            if not response:
+                openai_status = "ERROR: No response from OpenAI"
         except Exception as e:
             openai_status = f"ERROR: {str(e)}"
         
@@ -1271,14 +1066,22 @@ async def healthcheck():
         except Exception as e:
             search_status = f"ERROR: {str(e)}"
         
+        # Métricas adicionales para monitoreo (Punto 9)
+        metrics = {
+            "conversation_history_size": sum(len(data["messages"]) for data in conversation_history.values()),
+            "manual_cache_size": sum(1 for _ in manual_cache.values()),
+            "redis_available": redis_available
+        }
+        
         return {
-            "status": "healthy",
+            "status": "healthy" if all([redis_status == "OK", openai_status == "OK", search_status == "OK"]) else "degraded",
             "services": {
                 "redis": redis_status,
                 "openai": openai_status,
                 "azure_search": search_status
             },
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "metrics": metrics
         }
     except Exception as e:
         logger.error(f"Error en healthcheck: {str(e)}")
