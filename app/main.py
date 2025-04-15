@@ -15,7 +15,7 @@ sys.path.insert(0, str(root_dir))
 os.environ["PYTHONPATH"] = str(root_dir)
 
 import logging
-from fastapi import FastAPI, Request, File, UploadFile, Form, HTTPException, Response
+from fastapi import FastAPI, Request, File, UploadFile, Form, HTTPException, Response, BackgroundTasks
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -27,10 +27,13 @@ from typing import List
 import re
 import json
 from datetime import datetime
+import asyncio
+from contextlib import asynccontextmanager
 from opencensus.ext.azure.log_exporter import AzureLogHandler
 from opencensus.ext.azure import metrics_exporter
 
 # Importar servicios y modelos
+from app.services.redis_service import RedisService
 from app.services.azure_search_service import AzureSearchService
 from app.services.azure_openai_service import AzureOpenAIService
 from app.services.azure_ai_foundry_service import AzureAIFoundryService
@@ -77,7 +80,7 @@ for logger_name in ['azure.core.pipeline.policies.http_logging_policy', 'app.ser
     logger.setLevel(logging.INFO if os.getenv("PRODUCTION") else logging.DEBUG)
     logger.propagate = True
 
-# Integrar Application Insights (Punto 9)
+# Integrar Application Insights
 app_insights_key = os.getenv("APP_INSIGHTS_INSTRUMENTATION_KEY")
 if app_insights_key:
     logger.addHandler(AzureLogHandler(connection_string=f'InstrumentationKey={app_insights_key}'))
@@ -89,23 +92,71 @@ else:
 # Variables globales para servicios (singleton)
 settings = Settings()
 
-# Inicializar servicios a nivel de módulo para reutilización
-search_service = None
-openai_service = None
-ai_foundry_service = None
+# Funciones para inicialización y limpieza de recursos
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Inicialización al arranque
+    await startup()
+    
+    # Ceder control a FastAPI
+    yield
+    
+    # Limpieza al cierre
+    await shutdown()
 
-def initialize_services():
-    global search_service, openai_service, ai_foundry_service
-    if search_service is None:
-        search_service = AzureSearchService()
-    if openai_service is None:
-        openai_service = AzureOpenAIService()
-    if ai_foundry_service is None:
-        ai_foundry_service = AzureAIFoundryService()
-    return search_service, openai_service, ai_foundry_service
+async def startup():
+    """Inicialización asíncrona de servicios y recursos."""
+    logger.info("Iniciando servicios de la aplicación...")
+    start_time = time.time()
+    
+    # Inicializar Redis
+    redis_service = RedisService()
+    app.state.redis_service = redis_service
+    
+    # Inicializar servicios de forma paralela
+    await asyncio.gather(
+        initialize_search_service(),
+        initialize_openai_service(),
+        initialize_ai_foundry_service()
+    )
+    
+    elapsed = time.time() - start_time
+    logger.info(f"Servicios inicializados en {elapsed:.2f} segundos")
+    
+    # Iniciar verificación periódica de salud
+    asyncio.create_task(periodic_health_check())
 
-# Inicializar servicios al inicio
-search_service, openai_service, ai_foundry_service = initialize_services()
+async def shutdown():
+    """Limpieza y liberación de recursos."""
+    logger.info("Cerrando servicios...")
+
+async def initialize_search_service():
+    app.state.search_service = AzureSearchService()
+    logger.info("Servicio de búsqueda inicializado")
+
+async def initialize_openai_service():
+    app.state.openai_service = AzureOpenAIService()
+    logger.info("Servicio de OpenAI inicializado")
+
+async def initialize_ai_foundry_service():
+    app.state.ai_foundry_service = AzureAIFoundryService()
+    logger.info("Servicio de AI Foundry inicializado")
+
+async def periodic_health_check():
+    """Ejecuta verificaciones periódicas de salud de los servicios."""
+    while True:
+        try:
+            await asyncio.sleep(300)  # 5 minutos
+            
+            # Verificar Redis
+            if hasattr(app.state, 'redis_service'):
+                redis_available = app.state.redis_service.ensure_connection()
+                logger.info(f"Redis disponible: {redis_available}")
+            
+            # Verificar otros servicios
+            logger.info("Verificación periódica de salud completada")
+        except Exception as e:
+            logger.error(f"Error en verificación periódica: {str(e)}")
 
 # Inicializar FastAPI con documentación personalizada
 app = FastAPI(
@@ -113,13 +164,9 @@ app = FastAPI(
     description="Asistente técnico especializado en productos del Grupo SVAN",
     version="1.0.0",
     docs_url="/api/docs" if not os.getenv("PRODUCTION", False) else None,
-    redoc_url="/api/redoc" if not os.getenv("PRODUCTION", False) else None
+    redoc_url="/api/redoc" if not os.getenv("PRODUCTION", False) else None,
+    lifespan=lifespan  # Usar el gestor de contexto para lifecycle events
 )
-
-# Almacenar servicios en el estado de la aplicación para acceso fácil
-app.state.search_service = search_service
-app.state.openai_service = openai_service
-app.state.ai_foundry_service = ai_foundry_service
 
 # Configurar middleware de seguridad
 app.add_middleware(
@@ -181,7 +228,7 @@ async def list_all_documents():
         raise HTTPException(status_code=404, detail="Endpoint no disponible en producción")
     try:
         start_time = time.time()
-        all_docs = await search_service.search_manuals()
+        all_docs = await app.state.search_service.search_manuals()
         elapsed = time.time() - start_time
         
         return {
@@ -206,17 +253,22 @@ def health_check():
     try:
         checks = {
             "app": "healthy",
-            "search_service": "initialized" if search_service else "missing",
-            "openai_service": "initialized" if openai_service else "missing",
-            "ai_foundry_service": "initialized" if ai_foundry_service else "missing",
+            "redis": "initialized" if hasattr(app.state, 'redis_service') and app.state.redis_service.connected else "degraded",
+            "search_service": "initialized" if hasattr(app.state, 'search_service') else "missing",
+            "openai_service": "initialized" if hasattr(app.state, 'openai_service') else "missing",
+            "ai_foundry_service": "initialized" if hasattr(app.state, 'ai_foundry_service') else "missing",
         }
-        # Métricas adicionales para monitoreo (Punto 9)
+        # Métricas adicionales para monitoreo
         metrics = {
             "services_initialized": all(status == "initialized" for status in checks.values()),
             "timestamp": datetime.now().isoformat()
         }
+        
+        # Verificar estado general
+        is_healthy = all(status in ["initialized", "healthy"] for status in checks.values())
+        
         return {
-            "status": "healthy" if all(status == "initialized" for status in checks.values()) else "degraded",
+            "status": "healthy" if is_healthy else "degraded",
             "checks": checks,
             "metrics": metrics
         }
@@ -253,39 +305,52 @@ async def general_exception_handler(request: Request, exc: Exception):
     )
 
 @app.post("/api/feedback")
-async def submit_feedback(feedback_data: dict):
+async def submit_feedback(feedback_data: dict, background_tasks: BackgroundTasks):
     """Endpoint para enviar feedback del usuario"""
     try:
         feedback_data["timestamp"] = datetime.now().isoformat()
-        feedback_logger.info(json.dumps(feedback_data))
-        logger.info(f"Feedback recibido: Rating={feedback_data.get('rating')}, Comment={feedback_data.get('comment', '')[:30]}")
+        
+        # Procesar feedback en segundo plano para no bloquear la respuesta
+        background_tasks.add_task(process_feedback, feedback_data)
+        
         return {"status": "success"}
     except Exception as e:
         logger.error(f"Error al procesar feedback: {str(e)}")
         raise HTTPException(status_code=500, detail="Error al procesar feedback")
 
+async def process_feedback(feedback_data: dict):
+    """Procesa el feedback en segundo plano."""
+    try:
+        feedback_logger.info(json.dumps(feedback_data))
+        logger.info(f"Feedback recibido: Rating={feedback_data.get('rating')}, Comment={feedback_data.get('comment', '')[:30]}")
+    except Exception as e:
+        logger.error(f"Error procesando feedback en segundo plano: {str(e)}")
+
 if __name__ == "__main__":
     # Determinar el puerto - Azure App Service usa la variable WEBSITES_PORT
     port = int(os.getenv("WEBSITES_PORT", os.getenv("PORT", 8000)))
     
-    # Configuración optimizada de uvicorn para producción (Punto 8)
+    # Configuración optimizada de uvicorn para producción
     if os.getenv("PRODUCTION", "False").lower() == "true":
-        workers = min(int(os.getenv("WEB_CONCURRENCY", "4")), os.cpu_count() * 2 + 1)
+        # Usar 2 x núcleos + 1 para aprovechar mejor los recursos
+        num_cores = os.cpu_count() or 1
+        workers = min(int(os.getenv("WEB_CONCURRENCY", num_cores * 2 + 1)), num_cores * 4)
         log_level = "info"
         reload = False
         limit_concurrency = 50
         timeout_keep_alive = 5
+        backlog = 2048  # Cola de conexiones pendientes
     else:
         workers = 1
         log_level = "debug"
         reload = False
         limit_concurrency = None
         timeout_keep_alive = 5
+        backlog = 1024
     
     logger.info(f"Iniciando servidor con {workers} workers en modo {'producción' if os.getenv('PRODUCTION') else 'desarrollo'}")
     
-    # Nota: En Azure App Service, se debe usar Gunicorn como comando de inicio:
-    # gunicorn -w 4 -k uvicorn.workers.UvicornWorker app.main:app
+    # Nota: En Azure App Service, se debe usar Gunicorn como comando de inicio
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
@@ -297,5 +362,6 @@ if __name__ == "__main__":
         access_log=True,
         reload=reload,
         limit_concurrency=limit_concurrency,
-        timeout_keep_alive=timeout_keep_alive
+        timeout_keep_alive=timeout_keep_alive,
+        backlog=backlog
     )

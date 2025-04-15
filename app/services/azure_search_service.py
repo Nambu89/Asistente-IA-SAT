@@ -8,9 +8,13 @@ import logging
 import asyncio
 import re
 import time
+import json
 from typing import Optional, List, Dict, Any
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
+
+# Importar nuevo servicio Redis
+from app.services.redis_service import RedisService
 
 # Configurar logging
 logger = logging.getLogger(__name__)
@@ -66,10 +70,13 @@ class AzureSearchService:
             )
             logger.info("AzureSearchService inicializado correctamente")
 
-            # Inicializar caché en memoria
-            self.manual_cache = {}
+            # Inicializar servicio Redis para caché distribuida
+            self.redis = RedisService()
             self.cache_ttl = 3600  # 1 hora
-            self.last_cache_cleanup = time.time()
+            
+            # Mantener una caché en memoria mínima como respaldo
+            self.memory_cache = {}
+            self.memory_cache_size = 20  # Número máximo de entradas en memoria
 
         except Exception as e:
             logger.error(f"Error inicializando AzureSearchService: {str(e)}")
@@ -88,12 +95,19 @@ class AzureSearchService:
         Returns:
             Lista de documentos encontrados
         """
-        cache_key = f"search_{query}_{limit}"
-        if cache_key in self.manual_cache:
-            cache_entry = self.manual_cache[cache_key]
-            if time.time() - cache_entry['timestamp'] < self.cache_ttl:
-                logger.info(f"Usando caché para búsqueda: {query}")
-                return cache_entry['data']
+        cache_key = f"svan:search:{query if query else 'all'}_{limit if limit else 50}"
+        
+        # Intentar obtener de Redis
+        if self.redis.connected:
+            cached_data = self.redis.get_json(cache_key)
+            if cached_data:
+                logger.info(f"Usando caché Redis para búsqueda: {query}")
+                return cached_data
+        
+        # Intentar obtener de memoria como respaldo
+        if cache_key in self.memory_cache:
+            logger.info(f"Usando caché memoria para búsqueda: {query}")
+            return self.memory_cache[cache_key]['data']
 
         start_time = time.time()
         try:
@@ -105,15 +119,24 @@ class AzureSearchService:
             search_fields = ["metadata_storage_name", "modelo", "content"] if query else None
             
             # Limitar número de resultados si se especifica
-            top = min(limit, 50) if limit else 50  # Reducido de 100 a 50 para mejorar rendimiento
+            top = min(limit or 50, 50)  # Máximo 50 resultados
+            
+            # Construir filtro si el query parece un modelo
+            filter_condition = None
+            if query and re.match(r'[SWAH][A-Z0-9]{2,}', query.upper()):
+                # Es un posible modelo, optimizamos la búsqueda
+                query_upper = query.upper()
+                filter_condition = f"modelo eq '{query_upper}' or modelo eq '{query_upper}*'"
+                logger.info(f"Aplicando filtro para modelo: {filter_condition}")
             
             all_results = list(self.client.search(
                 search_text=search_text,
-                query_type="simple",  # Usar búsqueda simple para mayor velocidad
+                query_type="simple", 
                 search_fields=search_fields,
                 select=["metadata_storage_name", "metadata_storage_path", "content", "modelo", "metadata_storage_size"],
                 top=top,
-                include_total_count=True
+                include_total_count=True,
+                filter=filter_condition
             ))
             
             logger.info(f"Total de documentos encontrados: {len(all_results)}")
@@ -122,7 +145,7 @@ class AzureSearchService:
             documents = []
             for result in all_results:
                 doc = {
-                    "name": result.get("metadata_storage_name", None),  # Manejar None explícitamente
+                    "name": result.get("metadata_storage_name", None),
                     "modelo": result.get("modelo", "No model"),
                     "content": result.get("content", "No content"),
                     "path": result.get("metadata_storage_path", "No path"),
@@ -130,11 +153,16 @@ class AzureSearchService:
                 }
                 documents.append(doc)
             
-            # Almacenar en caché
-            self.manual_cache[cache_key] = {
+            # Almacenar en Redis si está disponible
+            if self.redis.connected:
+                self.redis.set_json(cache_key, documents, ex=self.cache_ttl)
+            
+            # Almacenar en memoria como respaldo (con gestión de tamaño)
+            self.memory_cache[cache_key] = {
                 'data': documents,
                 'timestamp': time.time()
             }
+            self._manage_memory_cache()
             
             # Log de rendimiento
             elapsed = time.time() - start_time
@@ -156,36 +184,58 @@ class AzureSearchService:
         Returns:
             Diccionario con información del manual o None si no se encuentra
         """
-        # Verificar caché
-        cache_key = f"manual_{model.upper().strip()}"
-        if cache_key in self.manual_cache:
-            cache_entry = self.manual_cache[cache_key]
-            if time.time() - cache_entry['timestamp'] < self.cache_ttl:
-                logger.info(f"Usando manual desde caché para {model}")
-                return cache_entry['data']
+        if not model:
+            return None
+            
+        # Normalizar modelo
+        model_normalized = model.upper().strip()
+        cache_key = f"svan:manual:{model_normalized}"
         
-        # Limpiar caché antigua cada hora
-        current_time = time.time()
-        if current_time - self.last_cache_cleanup > 3600:
-            self._cleanup_cache()
-            self.last_cache_cleanup = current_time
+        # Intentar obtener de Redis
+        if self.redis.connected:
+            cached_data = self.redis.get_json(cache_key)
+            if cached_data:
+                logger.info(f"Usando manual desde Redis para {model}")
+                return cached_data
+        
+        # Intentar obtener de memoria como respaldo
+        if cache_key in self.memory_cache:
+            logger.info(f"Usando manual desde memoria para {model}")
+            return self.memory_cache[cache_key]['data']
         
         start_time = time.time()
         try:
-            logger.info(f"Buscando manual para modelo: {model}")
+            logger.info(f"Buscando manual para modelo: {model_normalized}")
             
-            # Normalizar el modelo (eliminar espacios y convertir a mayúsculas)
-            model_normalized = model.upper().strip()
-            model_with_wildcard = f"{model_normalized}*"
-            
-            # Estrategia optimizada: búsqueda directa en el campo 'modelo' para mayor velocidad
+            # Estrategia 1: Buscar modelo exacto
+            filter_expr = f"modelo eq '{model_normalized}'"
             results = list(self.client.search(
-                search_text=model_with_wildcard,
-                query_type="simple",  # Usar búsqueda simple para mayor velocidad
-                search_fields=["modelo"],  # Buscar solo en el campo 'modelo'
+                search_text="*",
+                filter=filter_expr,
                 select=["metadata_storage_name", "metadata_storage_path", "content", "modelo"],
                 top=1
             ))
+            
+            # Si no hay resultados, intentar con comodín
+            if not results:
+                logger.info(f"No se encontró coincidencia exacta, probando con comodín")
+                filter_expr = f"search.ismatch('{model_normalized}*', 'modelo')"
+                results = list(self.client.search(
+                    search_text="*",
+                    filter=filter_expr,
+                    select=["metadata_storage_name", "metadata_storage_path", "content", "modelo"],
+                    top=1
+                ))
+            
+            # Si aún no hay resultados, última estrategia
+            if not results:
+                logger.info(f"Último intento: búsqueda de texto completo")
+                results = list(self.client.search(
+                    search_text=model_normalized,
+                    search_fields=["modelo"],
+                    select=["metadata_storage_name", "metadata_storage_path", "content", "modelo"],
+                    top=1
+                ))
             
             if not results:
                 logger.warning(f"No se encontró manual para el modelo: {model}")
@@ -193,7 +243,7 @@ class AzureSearchService:
             
             # Procesar resultado
             result = results[0]
-            name = result.get("metadata_storage_name", None)  # Manejar None explícitamente
+            name = result.get("metadata_storage_name", None)
             modelo = result.get("modelo", "No model")
             content = result.get("content", "")
             
@@ -206,18 +256,28 @@ class AzureSearchService:
             content = re.sub(r' +', ' ', content)
             content = re.sub(r'^\s+|\s+$', '', content, flags=re.MULTILINE)
             
+            # Truncar contenido si es extremadamente largo
+            if len(content) > 100000:
+                logger.warning(f"Contenido muy largo ({len(content)} caracteres), truncando")
+                content = content[:100000] + "\n\n[Contenido truncado por ser demasiado largo...]"
+            
             manual_data = {
-                "name": name,  # Puede ser None, lo cual es válido ya que no se buscan imágenes
+                "name": name,
                 "modelo": modelo,
                 "content": content,
                 "path": result.get("metadata_storage_path", "No path")
             }
             
-            # Guardar en caché
-            self.manual_cache[cache_key] = {
+            # Guardar en Redis si está disponible
+            if self.redis.connected:
+                self.redis.set_json(cache_key, manual_data, ex=self.cache_ttl)
+            
+            # Guardar en memoria como respaldo
+            self.memory_cache[cache_key] = {
                 'data': manual_data,
                 'timestamp': time.time()
             }
+            self._manage_memory_cache()
             
             # Log de rendimiento
             elapsed = time.time() - start_time
@@ -229,26 +289,21 @@ class AzureSearchService:
             logger.error(f"Error buscando manual: {str(e)}", exc_info=True)
             return None
 
-    def _cleanup_cache(self):
-        """Limpia entradas caducadas de la caché"""
-        current_time = time.time()
-        expired_keys = [
-            k for k, v in self.manual_cache.items()
-            if current_time - v['timestamp'] > self.cache_ttl
-        ]
-        for key in expired_keys:
-            del self.manual_cache[key]
-        logger.info(f"Caché limpiada: eliminadas {len(expired_keys)} entradas antiguas")
-
-if __name__ == "__main__":
-    # Ejemplo de uso para depuración
-    async def main():
-        start = time.time()
-        service = AzureSearchService()
-        manuals = await service.search_manuals()
-        print(f"Manuales encontrados: {len(manuals)}")
-        manual = await service.get_manual_by_model("AI2300")
-        print(f"Manual para AI2300: {manual is not None}")
-        print(f"Tiempo total: {time.time() - start:.2f}s")
-
-    asyncio.run(main())
+    def _manage_memory_cache(self):
+        """Gestiona el tamaño de la caché en memoria, eliminando entradas antiguas si es necesario"""
+        if len(self.memory_cache) <= self.memory_cache_size:
+            return
+            
+        # Eliminar entradas más antiguas
+        sorted_entries = sorted(
+            self.memory_cache.items(),
+            key=lambda x: x[1]['timestamp']
+        )
+        
+        # Mantener solo las más recientes
+        to_remove = len(self.memory_cache) - self.memory_cache_size
+        for i in range(to_remove):
+            key = sorted_entries[i][0]
+            del self.memory_cache[key]
+            
+        logger.debug(f"Limpieza de caché en memoria: eliminadas {to_remove} entradas antiguas")

@@ -19,36 +19,38 @@ from typing import Optional, List, Dict, Any, Tuple, Union
 from datetime import datetime
 import aiofiles
 import asyncio
-import random
 import os
 from pathlib import Path
 from retrying import retry
+import traceback
 
-import redis
-from fastapi import APIRouter, Form, File, UploadFile, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
-from PIL import Image
-
+# Importar servicios optimizados
+from app.services.redis_service import RedisService
 from app.services.azure_search_service import AzureSearchService
 from app.services.azure_ai_foundry_service import AzureAIFoundryService
 from app.services.azure_openai_service import AzureOpenAIService
+from fastapi import APIRouter, Form, File, UploadFile, HTTPException, Request, Response, BackgroundTasks
+from fastapi.responses import JSONResponse
+from PIL import Image
+
 from app.core.settings import Settings
 
 # Configuración
 settings = Settings()
 
-# Constantes
+# Constantes (leer desde variables de entorno si es posible)
 GPT_MODEL = "gpt-4o-mini"
 SMALL_MODEL_FOR_SUMMARIES = "gpt-3.5-turbo"
-MAX_TOKENS = 4000
-DEFAULT_TEMPERATURE = 0.7
-SESSION_EXPIRY = 86400 * 14  # 2 semanas en segundos
-CONTEXT_WINDOW_MESSAGES = 25  # Mensajes a mantener en el contexto
-MAX_HISTORY_TOKENS = 8000  # Límite aproximado de tokens para historia de conversación
+MAX_TOKENS = int(os.getenv("AZURE_OPENAI_MAX_TOKENS", "800"))
+DEFAULT_TEMPERATURE = float(os.getenv("AZURE_OPENAI_TEMPERATURE", "0.7"))
+SESSION_EXPIRY = int(os.getenv("SESSION_EXPIRY", "1209600"))  # 2 semanas en segundos por defecto
+CONTEXT_WINDOW_MESSAGES = int(os.getenv("CONTEXT_WINDOW_MESSAGES", "25"))  # Mensajes a mantener en el contexto
+MAX_HISTORY_TOKENS = int(os.getenv("MAX_HISTORY_TOKENS", "8000"))  # Límite aproximado de tokens para historia
+MAX_CONTEXT_LENGTH = int(os.getenv("MAX_CONTEXT_LENGTH", "15000"))  # Caracteres máximos para contexto de manuales
 
 # Configurar logging detallado
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO if os.getenv("PRODUCTION") else logging.DEBUG)
 
 # Directorio para almacenar archivos temporales
 TEMP_DIR = Path("temp")
@@ -57,55 +59,18 @@ TEMP_DIR.mkdir(exist_ok=True)
 # Crear router para integrarlo en la aplicación principal
 router = APIRouter()
 
-# Configuración de Redis
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
-REDIS_SSL = os.getenv("REDIS_SSL", "False").lower() == "true"
+# Inicializar servicios de forma óptima
+redis_service = RedisService()
+search_service = AzureSearchService()
+ai_foundry_service = AzureAIFoundryService()
+openai_service = ai_foundry_service
+azure_openai_service = AzureOpenAIService()
 
-# Inicializar cliente Redis con reconexión automática
-try:
-    pool = redis.ConnectionPool(
-        host=REDIS_HOST,
-        port=REDIS_PORT,
-        password=REDIS_PASSWORD,
-        decode_responses=True,
-        max_connections=10,
-        health_check_interval=30,
-        retry_on_timeout=True
-    )
-    if REDIS_SSL:
-        pool.connection_class = redis.SSLConnection
-        pool.connection_kwargs.update({
-            'ssl_cert_reqs': 'required',
-        })
-    redis_client = redis.Redis(connection_pool=pool)
-    redis_client.ping()
-    redis_available = True
-    logger.info("Conexión a Redis establecida correctamente")
-except Exception as e:
-    logger.error(f"Error al conectar con Redis: {str(e)}")
-    logger.warning("Utilizando almacenamiento en memoria como fallback")
-    redis_available = False
-
-# Historial de conversación para mantener contexto (fallback si Redis no está disponible)
+# Memoria caché para historial de conversaciones - usada solo como fallback
 conversation_history = {}
-
-# Caché de manuales para búsqueda más eficiente
-manual_cache = {}
 
 class SessionManager:
     """Clase para gestionar sesiones y mantener contexto de conversación"""
-    
-    @retry(stop_max_attempt_number=3, wait_fixed=2000)
-    def connect_redis(self):
-        return redis.Redis(
-            host=settings.REDIS_HOST,
-            port=settings.REDIS_PORT,
-            password=settings.REDIS_PASSWORD,
-            ssl=settings.REDIS_SSL,
-            decode_responses=True
-        )
     
     @staticmethod
     async def get_session_id(request: Request) -> str:
@@ -130,27 +95,15 @@ class SessionManager:
         Recupera el historial de conversación desde Redis o memoria.
         Implementa mecanismos de recuperación y respaldo.
         """
-        if redis_available:
-            try:
-                history_key = f"svan:chat:{session_id}"
-                data = redis_client.get(history_key)
-                
-                if data:
-                    try:
-                        parsed_data = json.loads(data)
-                        if isinstance(parsed_data, dict) and "messages" in parsed_data:
-                            return parsed_data
-                        else:
-                            logger.warning(f"Datos de sesión {session_id[:8]} malformados, inicializando nueva sesión")
-                    except json.JSONDecodeError:
-                        logger.error(f"Error al decodificar JSON de Redis para sesión {session_id[:8]}")
-            except Exception as e:
-                logger.error(f"Error recuperando datos de Redis: {str(e)}")
-                try:
-                    redis_client.ping()
-                except:
-                    pass
+        history_key = f"svan:chat:{session_id}"
         
+        # Intentar obtener de Redis primero
+        if redis_service.connected:
+            data = redis_service.get_json(history_key)
+            if data and isinstance(data, dict) and "messages" in data:
+                return data
+        
+        # Si no está en Redis o hay un error, usar memoria
         if session_id not in conversation_history:
             conversation_history[session_id] = {
                 "current_model": None,
@@ -171,34 +124,72 @@ class SessionManager:
         """
         history_data["last_active"] = datetime.now().isoformat()
         
-        conversation_history[session_id] = history_data
+        # Siempre guardar en memoria local como respaldo
+        conversation_history[session_id] = history_data.copy()
         
-        if redis_available:
+        # Gestionar tamaño máximo de la conversación
+        if len(history_data.get("messages", [])) > CONTEXT_WINDOW_MESSAGES * 2:
+            # Reducir tamaño si es muy grande
+            history_data["messages"] = history_data["messages"][-CONTEXT_WINDOW_MESSAGES:]
+        
+        # Guardar en Redis si está disponible
+        if redis_service.connected:
+            # Verificar tamaño del JSON antes de guardar
             try:
                 history_key = f"svan:chat:{session_id}"
-                history_json = json.dumps(history_data)
-                if len(history_json) > 500000:
-                    if len(history_data.get("messages", [])) > CONTEXT_WINDOW_MESSAGES:
-                        history_data["messages"] = history_data["messages"][-CONTEXT_WINDOW_MESSAGES:]
-                        await ConversationHandler.generate_context_summary(history_data["messages"])
-                        history_json = json.dumps(history_data)
-                        logger.info(f"Historia comprimida a {len(history_json)} bytes para sesión {session_id[:8]}")
-                
-                pipe = redis_client.pipeline()
-                pipe.set(history_key, history_json)
-                pipe.expire(history_key, SESSION_EXPIRY)
-                pipe.execute()
-                
-                return True
+                return redis_service.set_json(history_key, history_data, ex=SESSION_EXPIRY)
             except Exception as e:
                 logger.error(f"Error guardando datos en Redis: {str(e)}")
-                try:
-                    redis_client.ping()
-                except:
-                    pass
                 return False
         
         return True
+    
+    @staticmethod
+    async def cleanup_old_sessions(background_tasks: BackgroundTasks):
+        """Limpia sesiones antiguas para liberar memoria"""
+        if redis_service.connected:
+            background_tasks.add_task(SessionManager._do_cleanup_sessions)
+    
+    @staticmethod
+    async def _do_cleanup_sessions():
+        """Tarea en segundo plano para limpiar sesiones antiguas"""
+        try:
+            # Buscar sesiones antiguas en Redis
+            session_keys = redis_service.keys("svan:chat:*")
+            now = datetime.now()
+            count = 0
+            
+            for key in session_keys:
+                try:
+                    data = redis_service.get_json(key)
+                    if not data or "last_active" not in data:
+                        continue
+                    
+                    last_active = datetime.fromisoformat(data["last_active"]) if isinstance(data["last_active"], str) else now
+                    days_inactive = (now - last_active).days
+                    
+                    # Eliminar sesiones inactivas por más de 14 días
+                    if days_inactive > 14:
+                        redis_service.delete(key)
+                        count += 1
+                        
+                except Exception as e:
+                    logger.error(f"Error procesando sesión {key}: {str(e)}")
+            
+            logger.info(f"Limpieza completada: {count} sesiones eliminadas")
+            
+            # Limpiar memoria local
+            local_count = 0
+            for session_id in list(conversation_history.keys()):
+                if session_id not in [k.split(":")[-1] for k in session_keys]:
+                    del conversation_history[session_id]
+                    local_count += 1
+            
+            if local_count > 0:
+                logger.info(f"Limpieza de memoria local: {local_count} sesiones eliminadas")
+                
+        except Exception as e:
+            logger.error(f"Error en limpieza de sesiones: {str(e)}")
 
 class ConversationHandler:
     """Clase para manejar la lógica de conversación"""
@@ -381,125 +372,43 @@ class ConversationHandler:
             return ""
         
         try:
-            summary_prompt = [
-                {"role": "system", "content": "Eres un asistente que resume contextos de conversación. Crea un resumen conciso de los puntos clave mencionados en la conversación, incluyendo problemas específicos, modelos de productos, síntomas, soluciones discutidas y cualquier otro detalle importante que debería recordarse para mantener la coherencia."},
-                {"role": "user", "content": "Resume esta conversación en un párrafo conciso capturando los detalles más importantes:\n\n" + "\n".join([f"{m['role']}: {m['content'][:300]}" for m in messages])}
-            ]
+            # Crear un resumen más simple y rápido sin usar OpenAI
+            topics = set()
+            models = set()
+            problems = set()
             
-            summary = await azure_openai_service.chat_completion(
-                messages=summary_prompt,
-                max_tokens=300,
-                temperature=0.3
-            )
+            for msg in messages[-10:]:
+                content = msg.get('content', '')
+                if isinstance(content, str):
+                    # Extraer modelos mencionados
+                    model_matches = re.findall(r'[SWAH][A-Z0-9]{2,}[0-9]+', content)
+                    models.update(model_matches)
+                    
+                    # Extraer problemas comunes
+                    for keyword in ['error', 'fallo', 'problema', 'no funciona', 'reparación', 
+                                   'no enciende', 'código', 'alarma', 'pantalla', 'ruido']:
+                        if keyword in content.lower():
+                            problems.add(keyword)
+                    
+                    # Extraer temas generales
+                    for topic in ['lavado', 'temperatura', 'programa', 'motor', 'placa', 'puerta',
+                                 'agua', 'calentamiento', 'instalación', 'componente', 'luz']:
+                        if topic in content.lower():
+                            topics.add(topic)
             
-            if summary:
-                logger.info(f"Resumen de contexto generado: {len(summary)} caracteres")
-                return summary
-            else:
-                logger.warning("No se pudo generar resumen, retornando vacío")
-                return ""
+            summary_parts = []
+            if models:
+                summary_parts.append(f"Modelos mencionados: {', '.join(models)}")
+            if problems:
+                summary_parts.append(f"Problemas: {', '.join(problems)}")
+            if topics:
+                summary_parts.append(f"Temas: {', '.join(topics)}")
+                
+            return ". ".join(summary_parts) if summary_parts else ""
+            
         except Exception as e:
             logger.error(f"Error generando resumen de contexto: {str(e)}")
-            try:
-                topics = set()
-                models = set()
-                for msg in messages[-10:]:
-                    model_matches = re.findall(r'[SWAH][A-Z0-9]{2,}[0-9]+', msg.get('content', ''))
-                    models.update(model_matches)
-                    for keyword in ['error', 'fallo', 'problema', 'no funciona', 'reparación']:
-                        if keyword in msg.get('content', '').lower():
-                            topics.add(keyword)
-                
-                summary_parts = []
-                if models:
-                    summary_parts.append(f"Modelos mencionados: {', '.join(models)}")
-                if topics:
-                    summary_parts.append(f"Temas: {', '.join(topics)}")
-                    
-                return ". ".join(summary_parts) if summary_parts else ""
-            except Exception:
-                return ""
-
-class ManualSearchService:
-    """Servicio para buscar y procesar manuales técnicos"""
-    
-    def __init__(self):
-        self.search_service = AzureSearchService()
-        self.cache = {}
-        self.cache_ttl = 3600  # 1 hora
-        self.last_cache_cleanup = time.time()
-    
-    async def search_manual_with_semantic(self, model: str, query: str = None) -> Dict[str, Any]:
-        """
-        Búsqueda mejorada de manuales con capacidades semánticas.
-        Combina la búsqueda exacta por modelo con la búsqueda semántica basada en la consulta.
-        """
-        cache_key = f"{model}_{query if query else 'default'}"
-        current_time = time.time()
-        
-        if current_time - self.last_cache_cleanup > 3600:
-            self._cleanup_cache()
-            self.last_cache_cleanup = current_time
-        
-        if cache_key in self.cache:
-            cache_entry = self.cache[cache_key]
-            if current_time - cache_entry['timestamp'] < self.cache_ttl:
-                logger.info(f"Usando manual desde caché para {cache_key}")
-                return cache_entry['data']
-        
-        try:
-            manual = await self.search_service.get_manual_by_model(model)
-            
-            if query and manual and len(manual.get('content', '')) > 5000:
-                try:
-                    keywords = query.lower().split()
-                    content = manual['content']
-                    paragraphs = content.split('\n\n')
-                    relevant_paragraphs = []
-                    
-                    for paragraph in paragraphs:
-                        if len(paragraph.strip()) < 20:
-                            continue
-                            
-                        paragraph_lower = paragraph.lower()
-                        relevance_score = sum(1 for keyword in keywords if keyword in paragraph_lower)
-                        for i in range(len(keywords)-1):
-                            if f"{keywords[i]} {keywords[i+1]}" in paragraph_lower:
-                                relevance_score += 3
-                        if relevance_score > 0:
-                            relevant_paragraphs.append((paragraph, relevance_score))
-                    
-                    relevant_paragraphs.sort(key=lambda x: x[1], reverse=True)
-                    top_paragraphs = [p[0] for p in relevant_paragraphs[:10]]
-                    
-                    if top_paragraphs:
-                        highlighted_content = "SECCIONES DESTACADAS RELEVANTES A TU CONSULTA:\n\n" + "\n\n".join(top_paragraphs) + "\n\n--- CONTENIDO COMPLETO DEL MANUAL ---\n\n" + content
-                        manual['content'] = highlighted_content
-                        logger.info(f"Contenido enriquecido con {len(top_paragraphs)} párrafos relevantes")
-                except Exception as e:
-                    logger.error(f"Error en la búsqueda semántica: {str(e)}")
-            
-            if manual:
-                self.cache[cache_key] = {
-                    'data': manual,
-                    'timestamp': current_time
-                }
-                
-            return manual
-        except Exception as e:
-            logger.error(f"Error en búsqueda mejorada de manual: {str(e)}")
-            return None
-    
-    def _cleanup_cache(self):
-        """Limpia entradas antiguas de la caché"""
-        current_time = time.time()
-        expired_keys = [k for k, v in self.cache.items() 
-                       if current_time - v['timestamp'] > self.cache_ttl]
-        
-        for key in expired_keys:
-            del self.cache[key]
-        
-        logger.info(f"Limpieza de caché: eliminadas {len(expired_keys)} entradas antiguas")
+            return ""
 
 class FileProcessor:
     """Clase para procesar archivos e imágenes"""
@@ -517,12 +426,14 @@ class FileProcessor:
                 if attachment.content_type.startswith('image/'):
                     content = await attachment.read()
                     with Image.open(BytesIO(content)) as img:
+                        # Redimensionar para reducir tamaño
                         max_dimension = 800
                         if img.width > max_dimension or img.height > max_dimension:
                             ratio = min(max_dimension / img.width, max_dimension / img.height)
                             new_size = (int(img.width * ratio), int(img.height * ratio))
                             img = img.resize(new_size, Image.LANCZOS)
                         
+                        # Optimizar imagen
                         output = BytesIO()
                         img.convert('RGB').save(output, format='JPEG', quality=75, optimize=True)
                         optimized_content = output.getvalue()
@@ -564,16 +475,12 @@ class FileProcessor:
             logger.error(f"Error guardando archivo {upload_file.filename}: {str(e)}")
             return None
 
-# Inicializar servicios
-manual_search_service = ManualSearchService()
-openai_service = AzureAIFoundryService()
-azure_openai_service = AzureOpenAIService()
-
 @router.post("/fullchat")
 async def fullchat(
     request: Request, 
     message: str = Form(None), 
-    attachments: list[UploadFile] = File(None)
+    attachments: list[UploadFile] = File(None),
+    background_tasks: BackgroundTasks = None
 ):
     """
     Endpoint mejorado que implementa el chat completo con manejo robusto de contexto
@@ -583,6 +490,10 @@ async def fullchat(
     try:
         session_id = await SessionManager.get_session_id(request) if request else "default_session"
         session_data = await SessionManager.get_conversation_history(session_id)
+        
+        # Programar limpieza de sesiones antiguas ocasionalmente (1 de cada 100 solicitudes)
+        if background_tasks and (int(time.time()) % 100 == 0):
+            await SessionManager.cleanup_old_sessions(background_tasks)
             
         logger.info(f"========== INICIO PROCESAMIENTO /fullchat SESIÓN: {session_id[:8]} ==========")
         
@@ -639,6 +550,7 @@ async def fullchat(
         else:
             model = session_data.get("current_model")
             
+        # Generar resumen periódicamente para mantener contexto compacto
         current_time = time.time()
         messages_since_last_summary = len(session_data.get("messages", [])) - (session_data.get("last_summary_message_count", 0) or 0)
         time_since_last_summary = current_time - session_data.get("last_summary_time", 0)
@@ -651,6 +563,7 @@ async def fullchat(
             session_data["last_summary_message_count"] = len(session_data["messages"])
             logger.info(f"Resumen actualizado: {len(context_summary)} caracteres")
         
+        # Manejar casos sin modelo
         if not model:
             if message and await ConversationHandler.is_greeting(message):
                 response = "¡Hola! Me alegro de saludarte. ¿En qué puedo ayudarte hoy? Puedo responder preguntas sobre electrodomésticos del Grupo SVAN (SVAN, WONDER, ASPES e HYUNDAI) y ayudarte con problemas técnicos específicos."
@@ -713,12 +626,27 @@ Para obtener la mejor ayuda, menciona siempre el modelo específico del electrod
                 general_messages.extend(recent_history)
                 
                 try:
-                    logger.info(f"Procesando pregunta general con OpenAI: {message}")
-                    response = await openai_service.chat_completion_with_data(
-                        messages=general_messages,
-                        max_tokens=1000,
-                        temperature=0.7
-                    )
+                    # Buscar respuesta en caché para consultas similares
+                    cache_key = f"svan:general:{hashlib.md5(message.lower().encode()).hexdigest()[:8]}"
+                    cached_response = None
+                    
+                    if redis_service.connected:
+                        cached_response = redis_service.get(cache_key)
+                    
+                    if cached_response:
+                        logger.info(f"Usando respuesta en caché para pregunta general")
+                        response = cached_response
+                    else:
+                        logger.info(f"Procesando pregunta general con OpenAI: {message}")
+                        response = await ai_foundry_service.chat_completion_with_data(
+                            messages=general_messages,
+                            max_tokens=1000,
+                            temperature=0.7
+                        )
+                        
+                        # Guardar en caché si es válida
+                        if response and redis_service.connected:
+                            redis_service.set(cache_key, response, ex=3600)  # 1 hora
                     
                     logger.info(f"Respuesta generada para pregunta general: {len(response)} caracteres")
                     
@@ -782,7 +710,7 @@ Para obtener la mejor ayuda, menciona siempre el modelo específico del electrod
                 
                 try:
                     logger.info(f"Analizando imágenes con OpenAI")
-                    response = await openai_service.chat_completion_with_data(
+                    response = await ai_foundry_service.chat_completion_with_data(
                         messages=image_analysis_messages,
                         max_tokens=1000,
                         temperature=0.7
@@ -833,8 +761,35 @@ Para obtener la mejor ayuda, menciona siempre el modelo específico del electrod
                     return response_obj
                 return json_response
         
-        manual_task = manual_search_service.search_manual_with_semantic(model, message)
-        manual = await manual_task
+        # Buscar información del manual (con caché y optimización)
+        cache_key = f"svan:manual:{model}"
+        manual = None
+        manual_from_cache = False
+        
+        # Comprobar caché primero
+        if redis_service.connected:
+            manual = redis_service.get_json(cache_key)
+            if manual:
+                manual_from_cache = True
+                logger.info(f"Manual para modelo {model} recuperado de caché")
+        
+        # Si no está en caché, buscarlo
+        if not manual:
+            logger.info(f"Buscando manual para modelo {model} (no estaba en caché)")
+            try:
+                # Buscar en el servicio de búsqueda principal - más confiable
+                manual = await search_service.get_manual_by_model(model)
+                
+                # Si no se encuentra, intentar con la búsqueda semántica
+                if not manual:
+                    manual = await search_service.search_manual_with_semantic(model, message)
+                
+                # Guardar en caché si se encontró
+                if manual and redis_service.connected:
+                    redis_service.set_json(cache_key, manual, ex=3600*24)  # 24 horas
+            except Exception as e:
+                logger.error(f"Error buscando manual: {str(e)}")
+                manual = None
         
         if not manual:
             error_response = f"Lo siento, no he encontrado un manual para el modelo {model}. Por favor, verifica que el código sea correcto o proporciona más detalles sobre el electrodoméstico."
@@ -866,10 +821,35 @@ Para obtener la mejor ayuda, menciona siempre el modelo específico del electrod
             return json_response
             
         logger.info(f"Contenido recuperado, longitud: {len(content)} caracteres")
-        logger.info(f"Primeros 200 caracteres: {content[:200]}")
-        logger.info(f"Últimos 200 caracteres: {content[-200:] if len(content) > 200 else content}")
+        
+        # Truncar contenido si es excesivamente largo
+        if len(content) > MAX_CONTEXT_LENGTH:
+            logger.info(f"Truncando contenido del manual de {len(content)} a {MAX_CONTEXT_LENGTH} caracteres")
+            content = content[:MAX_CONTEXT_LENGTH] + "\n\n... [Contenido truncado por límite de tamaño]"
             
         brand, product_type = await ConversationHandler.get_brand_and_type(model)
+        
+        # Comprobar caché para pares de modelo+mensaje similares
+        if message:
+            message_hash = hashlib.md5(message.lower().encode()).hexdigest()[:8]
+            response_cache_key = f"svan:resp:{model}:{message_hash}"
+            
+            if redis_service.connected and not processed_images:
+                cached_response = redis_service.get(response_cache_key)
+                if cached_response:
+                    logger.info(f"Usando respuesta en caché para modelo {model} y consulta similar")
+                    
+                    if message:
+                        session_data["messages"].append({"role": "user", "content": message})
+                    session_data["messages"].append({"role": "assistant", "content": cached_response})
+                    await SessionManager.save_conversation_history(session_id, session_data)
+                    
+                    json_response = {"response": cached_response}
+                    if request:
+                        response_obj = JSONResponse(content=json_response)
+                        response_obj.set_cookie(key="svan_session", value=session_id, max_age=SESSION_EXPIRY, httponly=True, samesite="lax")
+                        return response_obj
+                    return json_response
         
         initial_manual_context = f"""Modelo actual: {model}
 Marca: {brand}
@@ -894,6 +874,7 @@ El manual técnico para el modelo {model} contiene información sobre seguridad,
 """
         full_manual_context = initial_manual_context
         
+        # Optimización: usar solo mensajes recientes para conservar espacio
         recent_history = session_data["messages"][-3:] if session_data["messages"] else []
         
         messages = [
@@ -909,9 +890,11 @@ El manual técnico para el modelo {model} contiene información sobre seguridad,
             if details_str:
                 messages.append({"role": "system", "content": f"DETALLES IMPORTANTES:\n{details_str}"})
         
+        # Enriquecer contexto con contenido del manual
         messages.append({"role": "system", "content": full_manual_context})
         messages.extend(recent_history)
         
+        # Preparar mensaje del usuario con imágenes si existen
         if processed_images and message:
             user_message_content = [
                 {"type": "text", "text": message},
@@ -930,16 +913,18 @@ El manual técnico para el modelo {model} contiene información sobre seguridad,
             messages.append({"role": "user", "content": message})
             session_data["messages"].append({"role": "user", "content": message})
         
+        # Estimar tokens para ajustar max_tokens
+        input_tokens = sum(len(str(msg.get("content", ""))) for msg in messages) // 4 + 8 * len(messages)
+        adjusted_max_tokens = min(MAX_TOKENS, 4000 - min(input_tokens, 3000))
+        if adjusted_max_tokens < 100:
+            adjusted_max_tokens = 100
+        logger.info(f"Tokens estimados: ~{input_tokens}, max_tokens ajustado a {adjusted_max_tokens}")
+        
+        # Obtener respuesta de OpenAI
         logger.info(f"Enviando solicitud a OpenAI con modelo {GPT_MODEL}")
         start_openai_time = time.time()
         
-        input_tokens = await asyncio.get_event_loop().run_in_executor(None, lambda: sum(len(msg.get("content", "")) for msg in messages if isinstance(msg.get("content", ""), str)) // 4 + 8 * len(messages))
-        adjusted_max_tokens = min(MAX_TOKENS, 4000 - input_tokens)
-        if adjusted_max_tokens < 100:
-            adjusted_max_tokens = 100
-        logger.info(f"Ajustando max_tokens de {MAX_TOKENS} a {adjusted_max_tokens} (entrada: {input_tokens})")
-        
-        response = await openai_service.chat_completion_with_data(
+        response = await ai_foundry_service.chat_completion_with_data(
             messages=messages,
             query=message,
             model_number=model,
@@ -950,11 +935,19 @@ El manual técnico para el modelo {model} contiene información sobre seguridad,
         
         if not response:
             response = "Lo siento, ha ocurrido un error al generar la respuesta. Por favor, intenta nuevamente."
+        else:
+            # Guardar en caché si no hay imágenes (las respuestas con imágenes son muy específicas)
+            if redis_service.connected and message and not processed_images:
+                message_hash = hashlib.md5(message.lower().encode()).hexdigest()[:8]
+                response_cache_key = f"svan:resp:{model}:{message_hash}"
+                redis_service.set(response_cache_key, response, ex=3600*24)  # 24 horas
             
         logger.info(f"Respuesta generada: {len(response)} caracteres")
         
+        # Guardar respuesta en historial
         session_data["messages"].append({"role": "assistant", "content": response})
         
+        # Optimizar el tamaño del historial si es muy grande
         if len(session_data["messages"]) > CONTEXT_WINDOW_MESSAGES * 2:
             old_msgs = session_data["messages"][:-CONTEXT_WINDOW_MESSAGES]
             new_summary = await ConversationHandler.generate_context_summary(old_msgs)
@@ -964,13 +957,17 @@ El manual técnico para el modelo {model} contiene información sobre seguridad,
             session_data["last_summary_time"] = time.time()
             session_data["last_summary_message_count"] = len(session_data["messages"])
         
+        # Guardar historial actualizado
         await SessionManager.save_conversation_history(session_id, session_data)
         
+        # Preparar respuesta
         json_response = {"response": response}
         
+        # Registrar tiempo total
         processing_time = time.time() - start_time
         logger.info(f"Tiempo total de procesamiento: {processing_time:.2f}s")
         
+        # Devolver respuesta
         if request:
             response_obj = JSONResponse(content=json_response)
             response_obj.set_cookie(key="svan_session", value=session_id, max_age=SESSION_EXPIRY, httponly=True, samesite="lax")
@@ -978,16 +975,16 @@ El manual técnico para el modelo {model} contiene información sobre seguridad,
         return json_response
         
     except Exception as e:
-        logger.error(f"Error procesando consulta: {str(e)}", exc_info=True)
+        # Capturar y registrar el error completo
+        error_trace = traceback.format_exc()
+        logger.error(f"Error procesando consulta: {str(e)}\n{error_trace}")
         
         try:
             if 'session_id' in locals() and 'session_data' in locals():
                 session_data["error_occurred"] = True
                 await SessionManager.save_conversation_history(session_id, session_data)
-        except:
-            pass
-        
-        00
+        except Exception as inner_e:
+            logger.error(f"Error secundario al guardar estado de error: {str(inner_e)}")
         
         error_response = {"response": "Lo siento, ha ocurrido un error al procesar tu consulta. Por favor, intenta nuevamente en unos momentos."}
         if request:
@@ -1005,38 +1002,23 @@ async def analyze_image(image: UploadFile = File(...)):
         
         async with aiofiles.open(file_path, 'rb') as f:
             content = await f.read()
-        result = await asyncio.get_event_loop().run_in_executor(None, lambda: Tesseract.recognize(content, 'spa'))
-        text = result.data.text
-        error_codes = re.findall(r'[EF][0-9]{2,3}', text) or []
-        return {"error_codes": error_codes}
+            
+        # Buscar códigos de error comunes en la imagen
+        # Nota: Aquí asumimos que tienes implementado un servicio de OCR
+        # Si no tienes un servicio OCR, puedes eliminarlo o adaptarlo
+        try:
+            error_codes = []
+            # Código de ejemplo - reemplazar por tu implementación real
+            # result = await asyncio.get_event_loop().run_in_executor(None, lambda: Tesseract.recognize(content, 'spa'))
+            # text = result.data.text
+            # error_codes = re.findall(r'[EF][0-9]{2,3}', text) or []
+            return {"error_codes": error_codes}
+        except Exception as e:
+            logger.error(f"Error en OCR: {str(e)}")
+            return {"error_codes": []}
     except Exception as e:
         logger.error(f"Error al analizar imagen: {str(e)}")
         return {"error_codes": []}
-
-# Verificar estado de conexión a Redis de forma periódica
-async def check_redis_connection():
-    """Verificar el estado de la conexión a Redis de forma periódica"""
-    global redis_available
-    try:
-        redis_client.ping()
-        if not redis_available:
-            logger.info("Conexión a Redis restaurada")
-            redis_available = True
-    except:
-        if redis_available:
-            logger.warning("Conexión a Redis perdida, usando almacenamiento en memoria")
-            redis_available = False
-    
-    await asyncio.sleep(60)
-    asyncio.create_task(check_redis_connection())
-
-# Iniciar verificación periódica
-@router.on_event("startup")
-async def startup_redis_check():
-    asyncio.create_task(check_redis_connection())
-
-# Verificar estado de conexión a Redis de forma periódica (eliminamos duplicado)
-# El código anterior ya incluía esta función, así que no es necesario repetirla.
 
 # Endpoint de salud
 @router.get("/health")
@@ -1044,11 +1026,12 @@ async def healthcheck():
     """Verificar el estado de salud del servicio"""
     try:
         # Verificar Redis
-        redis_status = "OK" if redis_available else "ERROR"
+        redis_status = "OK" if redis_service.connected else "ERROR"
         
         # Verificar OpenAI
         openai_status = "OK"
         try:
+            # Verificación rápida de OpenAI
             response = await azure_openai_service.chat_completion(
                 messages=[{"role": "system", "content": "Test"}],
                 max_tokens=10
@@ -1056,21 +1039,23 @@ async def healthcheck():
             if not response:
                 openai_status = "ERROR: No response from OpenAI"
         except Exception as e:
-            openai_status = f"ERROR: {str(e)}"
+            openai_status = f"ERROR: {str(e)[:100]}"
         
         # Verificar Azure Search
         search_status = "OK"
         try:
-            search_service = AzureSearchService()
-            await search_service.search_manuals(limit=1)
+            # Verificación rápida de Search
+            test_result = await search_service.search_manuals(limit=1)
+            if test_result is None:
+                search_status = "ERROR: No response from Search service"
         except Exception as e:
-            search_status = f"ERROR: {str(e)}"
+            search_status = f"ERROR: {str(e)[:100]}"
         
-        # Métricas adicionales para monitoreo (Punto 9)
+        # Métricas para monitoreo
         metrics = {
-            "conversation_history_size": sum(len(data["messages"]) for data in conversation_history.values()),
-            "manual_cache_size": sum(1 for _ in manual_cache.values()),
-            "redis_available": redis_available
+            "conversation_history_size": len(conversation_history),
+            "redis_available": redis_service.connected,
+            "memory_usage_mb": f"{get_process_memory_usage():.1f}"
         }
         
         return {
@@ -1090,3 +1075,13 @@ async def healthcheck():
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
+
+# Utilidad para obtener uso de memoria del proceso
+def get_process_memory_usage():
+    """Obtiene el uso de memoria del proceso actual en MB"""
+    try:
+        import psutil
+        process = psutil.Process(os.getpid())
+        return process.memory_info().rss / 1024 / 1024
+    except ImportError:
+        return 0

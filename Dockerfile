@@ -81,4 +81,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
 # WEB_CONCURRENCY=4
 
 # Comando para ejecutar la aplicación con Gunicorn (Punto 8)
-CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "app.main:app", "--bind", "0.0.0.0:8000", "--log-level", "info"]
+CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "--timeout", "90", "--graceful-timeout", "30", "--keep-alive", "5", "--max-requests", "1000", "--max-requests-jitter", "50", "app.main:app", "--bind", "0.0.0.0:8000", "--log-level", "info"]
