@@ -25,7 +25,7 @@ import re
 # Importar servicios de Azure
 from app.services.azure_openai_service import AzureOpenAIService
 from app.services.azure_ai_foundry_service import AzureAIFoundryService
-from app.hotfix import chat_endpoint as hotfix_chat
+#from app.hotfix import chat_endpoint as hotfix_chat
 from app.standalone import router as standalone_router
 import uuid
 from datetime import datetime
@@ -133,10 +133,10 @@ async def read_root(request: Request):
     """Ruta principal que sirve la interfaz de chat"""
     return templates.TemplateResponse("chat.html", {"request": request})
 
-@app.post("/chat")
-async def chat(request: Request, message: str = Form(None), attachments: list[UploadFile] = File(None)):
-    """Endpoint principal del chat"""
-    return await hotfix_chat(request, message, attachments)
+#@app.post("/chat")
+# async def chat(request: Request, message: str = Form(None), attachments: list[UploadFile] = File(None)):
+#    """Endpoint principal del chat"""
+#    return await hotfix_chat(request, message, attachments)
 
 @app.get("/debug/list_all_documents")
 async def list_all_documents():

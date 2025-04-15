@@ -142,8 +142,9 @@ class AzureSearchService:
             print(f"\n=== BUSCANDO MANUAL PARA MODELO: {model} ===")
             logger.info(f"Buscando manual para modelo: {model}")
             
-            # Normalizar el modelo
+            # Normalizar el modelo (eliminar espacios y convertir a mayúsculas)
             model_normalized = model.upper().strip()
+            model_with_wildcard = f"{model_normalized}*"  # Permitir coincidencias parciales (por ejemplo, "AI2300 ")
             print(f"Modelo normalizado: {model_normalized}")
             logger.info(f"Modelo normalizado: {model_normalized}")
             
@@ -153,9 +154,9 @@ class AzureSearchService:
                 {
                     "name": "Búsqueda por modelo",
                     "search": lambda: list(self.client.search(
-                        search_text=model_normalized,
+                        search_text=model_with_wildcard,  # Usar wildcard para coincidencias parciales
                         search_fields=["modelo"],
-                        select=["metadata_storage_name", "metadata_storage_path", "content", "modelo", "metadata_storage_size"],
+                        select=["metadata_storage_name", "metadata_storage_path", "content", "modelo"],
                         top=1
                     ))
                 },
@@ -163,9 +164,9 @@ class AzureSearchService:
                 {
                     "name": "Búsqueda por nombre del archivo",
                     "search": lambda: list(self.client.search(
-                        search_text=model_normalized,
+                        search_text=model_with_wildcard,
                         search_fields=["metadata_storage_name"],
-                        select=["metadata_storage_name", "metadata_storage_path", "content", "modelo", "metadata_storage_size"],
+                        select=["metadata_storage_name", "metadata_storage_path", "content", "modelo"],
                         top=1
                     ))
                 },
@@ -175,7 +176,7 @@ class AzureSearchService:
                     "search": lambda: list(self.client.search(
                         search_text=f"manual técnico {model_normalized}",
                         search_mode="all",
-                        select=["metadata_storage_name", "metadata_storage_path", "content", "modelo", "metadata_storage_size"],
+                        select=["metadata_storage_name", "metadata_storage_path", "content", "modelo"],
                         top=3
                     ))
                 }
@@ -187,15 +188,22 @@ class AzureSearchService:
                 try:
                     results = strategy["search"]()
                     print(f"Estrategia #{i} encontró {len(results)} resultados")
+                    print(f"Resultados crudos: {results}")
                     logger.info(f"Estrategia #{i} encontró {len(results)} resultados")
+                    logger.info(f"Resultados crudos: {results}")
                     
                     if results:
                         # Si encontramos más de un resultado, priorizar el que tenga el modelo exacto
                         if len(results) > 1:
-                            exact_match = next((r for r in results if r.get("modelo", "").upper() == model_normalized), None)
+                            exact_match = next(
+                                (r for r in results if r.get("modelo", "").upper().strip() == model_normalized),
+                                None
+                            )
                             if exact_match:
                                 results = [exact_match]
-                            
+                                print(f"Encontrada coincidencia exacta: {exact_match.get('modelo')}")
+                                logger.info(f"Encontrada coincidencia exacta: {exact_match.get('modelo')}")
+                        
                         for result in results:
                             name = result.get("metadata_storage_name", "No name")
                             modelo = result.get("modelo", "No model")
@@ -210,9 +218,9 @@ class AzureSearchService:
                             # CRÍTICO: ASEGURAR QUE SE RECUPERE EL CONTENIDO COMPLETO
                             if content:
                                 # Limpiar el contenido de espacios en blanco excesivos y líneas vacías
-                                content = re.sub(r'\n\s*\n', '\n\n', content)  # Reemplazar múltiples líneas vacías con doble salto
-                                content = re.sub(r' +', ' ', content)  # Reemplazar múltiples espacios con uno solo
-                                content = re.sub(r'^\s+|\s+$', '', content, flags=re.MULTILINE)  # Eliminar espacios al inicio y final de cada línea
+                                content = re.sub(r'\n\s*\n', '\n\n', content)
+                                content = re.sub(r' +', ' ', content)
+                                content = re.sub(r'^\s+|\s+$', '', content, flags=re.MULTILINE)
                                 
                                 # Buscar imágenes relacionadas con este manual
                                 image_references = await self.find_images_for_manual(name, model_normalized)
@@ -222,7 +230,6 @@ class AzureSearchService:
                                     "modelo": modelo,
                                     "content": content,
                                     "path": result.get("metadata_storage_path", "No path"),
-                                    "size": result.get("metadata_storage_size", 0),
                                     "image_references": image_references
                                 }
                         
@@ -234,7 +241,6 @@ class AzureSearchService:
                         print(f"Contenido (primeros 200 chars): {content[:200]}")
                         logger.info(f"Contenido (primeros 200 chars): {content[:200]}")
                         
-                        # Búsqueda de imágenes relacionadas
                         name = first_result.get("metadata_storage_name", "No name")
                         image_references = await self.find_images_for_manual(name, model_normalized)
                         
@@ -243,7 +249,6 @@ class AzureSearchService:
                             "modelo": first_result.get("modelo", "No model"),
                             "content": content,
                             "path": first_result.get("metadata_storage_path", "No path"),
-                            "size": first_result.get("metadata_storage_size", 0),
                             "image_references": image_references
                         }
                 except Exception as search_error:

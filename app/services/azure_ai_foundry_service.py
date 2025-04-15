@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class AzureAIFoundryService:
     def __init__(self):
         self.settings = Settings()
-        self.api_key = self.settings.AZURE_OPENAI_API_KEY
+        self.api_key = self.settings.OPENAI_API_KEY
         self.endpoint = self.settings.AZURE_OPENAI_ENDPOINT.rstrip('/')
         self.api_version = self.settings.AZURE_OPENAI_API_VERSION
         self.deployment_name = self.settings.AZURE_OPENAI_DEPLOYMENT_NAME
@@ -71,11 +71,11 @@ class AzureAIFoundryService:
                         context_msg = {
                             "role": "system", 
                             "content": f"""Modelo: {model_number}
-    Marca: {brand}
-    Tipo: electrodoméstico
+                            Marca: {brand}
+                            Tipo: electrodoméstico
 
-    Manual técnico:
-    {content}"""
+                            Manual técnico:
+                            {content}"""
                         }
                         
                         # Insertar este mensaje como segundo mensaje del sistema
