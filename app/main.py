@@ -7,7 +7,29 @@ import os
 import sys
 from pathlib import Path
 import time
-import cachetools
+
+# Importación segura de cachetools
+try:
+    import cachetools
+except ImportError:
+    # Fallback si cachetools no está disponible
+    class LRUCache(dict):
+        def __init__(self, maxsize=128, *args, **kwargs):
+            self.maxsize = maxsize
+            super().__init__(*args, **kwargs)
+        
+        def __setitem__(self, key, value):
+            if len(self) >= self.maxsize:
+                self.pop(next(iter(self)), None)
+            super().__setitem__(key, value)
+    
+    # Crear un módulo simulado
+    class CacheToolsModule:
+        def __init__(self):
+            self.LRUCache = LRUCache
+    
+    cachetools = CacheToolsModule()
+    print("WARNING: Using simplified cachetools implementation")
 
 # Configurar el PYTHONPATH para que encuentre los módulos
 root_dir = Path(__file__).parent.parent
@@ -337,9 +359,9 @@ if __name__ == "__main__":
         workers = min(int(os.getenv("WEB_CONCURRENCY", num_cores * 2 + 1)), num_cores * 4)
         log_level = "info"
         reload = False
-        limit_concurrency = 50
+        limit_concurrency = 100
         timeout_keep_alive = 5
-        backlog = 2048  # Cola de conexiones pendientes
+        backlog = 4096   # Cola de conexiones pendientes
     else:
         workers = 1
         log_level = "debug"
