@@ -51,8 +51,7 @@ import json
 from datetime import datetime
 import asyncio
 from contextlib import asynccontextmanager
-from opencensus.ext.azure.log_exporter import AzureLogHandler
-from opencensus.ext.azure import metrics_exporter
+
 
 # Importar servicios y modelos
 from app.services.redis_service import RedisService
@@ -102,14 +101,7 @@ for logger_name in ['azure.core.pipeline.policies.http_logging_policy', 'app.ser
     logger.setLevel(logging.INFO if os.getenv("PRODUCTION") else logging.DEBUG)
     logger.propagate = True
 
-# Integrar Application Insights
-app_insights_key = os.getenv("APP_INSIGHTS_INSTRUMENTATION_KEY")
-if app_insights_key:
-    logger.addHandler(AzureLogHandler(connection_string=f'InstrumentationKey={app_insights_key}'))
-    feedback_logger.addHandler(AzureLogHandler(connection_string=f'InstrumentationKey={app_insights_key}'))
-    exporter = metrics_exporter.new_metrics_exporter(connection_string=f'InstrumentationKey={app_insights_key}')
-else:
-    logger.warning("No se proporcionó APP_INSIGHTS_INSTRUMENTATION_KEY, monitoreo con Application Insights desactivado")
+logger.info("Application Insights no está configurado y no se utilizará.")
 
 # Variables globales para servicios (singleton)
 settings = Settings()

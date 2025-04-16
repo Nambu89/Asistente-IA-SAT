@@ -1,9 +1,12 @@
 #!/bin/bash
 
+# Habilitar modo de depuración para mostrar cada comando ejecutado
+set -x
+
 # Verificar directorios y permisos
 echo "===== CHECKING DIRECTORIES ====="
-ls -la /app
-ls -la /app/uploads /app/Manuales /app/temp /app/logs
+ls -la /app || echo "WARNING: Failed to list /app directory"
+ls -la /app/uploads /app/Manuales /app/temp /app/logs || echo "WARNING: Failed to list subdirectories"
 
 # Verificar variables de entorno críticas (sin exponer valores completos)
 echo "===== CHECKING ENVIRONMENT VARIABLES ====="
@@ -27,16 +30,28 @@ fi
 
 # Verificar Python y dependencias críticas
 echo "===== CHECKING PYTHON SETUP ====="
-python --version
+python --version || echo "ERROR: Python not found!"
 echo "Python path: $PYTHONPATH"
 
 # Verificar que se pueden importar módulos críticos
-python -c "import fastapi; import redis; import azure; import cachetools; import tenacity; import httpx; import psutil; print(\"All critical imports successful!\")" || echo "ERROR: Failed to import critical modules"
+# Verificar que se pueden importar módulos críticos
+python -c "import fastapi; import redis; import azure.storage.blob; import azure.search.documents; import cachetools; import tenacity; import httpx; import psutil; print(\"All critical imports successful!\")" || {
+    echo "ERROR: Failed to import critical modules!"
+    echo "Checking individual imports:"
+    python -c "import fastapi" || echo "Failed to import fastapi"
+    python -c "import redis" || echo "Failed to import redis"
+    python -c "import azure.storage.blob" || echo "Failed to import azure.storage.blob"
+    python -c "import azure.search.documents" || echo "Failed to import azure.search.documents"
+    python -c "import cachetools" || echo "Failed to import cachetools"
+    python -c "import tenacity" || echo "Failed to import tenacity"
+    python -c "import httpx" || echo "Failed to import httpx"
+    python -c "import psutil" || echo "Failed to import psutil"
+}
 
 # Iniciar la aplicación con configuración productiva
 echo "===== STARTING APPLICATION ====="
 export PYTHONPATH=/app
-exec gunicorn \
+gunicorn \
     -w 4 \
     -k uvicorn.workers.UvicornWorker \
     --timeout 90 \
@@ -49,4 +64,4 @@ exec gunicorn \
     --log-level info \
     --capture-output \
     --bind 0.0.0.0:8000 \
-    app.main:app
+    app.main:app || echo "ERROR: Failed to start gunicorn!"

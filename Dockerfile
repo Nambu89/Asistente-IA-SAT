@@ -73,7 +73,6 @@ RUN mkdir -p /app/uploads /app/Manuales /app/temp /app/logs && \
 COPY app/ /app/app/
 COPY templates/ /app/templates/
 COPY static/ /app/static/
-COPY .env /app/.env
 
 # Crear usuario no root, pero mantener permisos amplios para directorios críticos
 RUN adduser --disabled-password --gecos '' --uid 1000 appuser
