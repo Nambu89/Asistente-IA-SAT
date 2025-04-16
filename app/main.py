@@ -83,6 +83,7 @@ if os.getenv("PRODUCTION", "False").lower() == "true":
 
 # Logger principal de la aplicación
 logger = logging.getLogger("app")
+logging.getLogger("httpx.client").setLevel(logging.WARNING)
 
 # Configurar un logger específico para feedback
 feedback_logger = logging.getLogger("feedback")

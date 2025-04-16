@@ -3,6 +3,10 @@ from pathlib import Path
 from typing import Dict, Optional, List
 from dotenv import load_dotenv
 import os
+import logging
+
+# Configurar logging básico para esta clase
+logger = logging.getLogger(__name__)
 
 # Cargar variables de entorno desde .env
 load_dotenv()
@@ -76,10 +80,6 @@ class Settings(BaseSettings):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        print(f"OPENAI_API_KEY: {self.OPENAI_API_KEY[:5]}...")
-        print(f"AZURE_OPENAI_ENDPOINT: {self.AZURE_OPENAI_ENDPOINT}")
-        print(f"AZURE_OPENAI_API_VERSION: {self.AZURE_OPENAI_API_VERSION}")
-        print(f"AZURE_OPENAI_DEPLOYMENT_NAME: {self.AZURE_OPENAI_DEPLOYMENT_NAME}")
         if not self.OPENAI_API_KEY:
             raise ValueError("No se encontró la clave de API de Azure OpenAI")
         if not self.AZURE_OPENAI_ENDPOINT:
@@ -89,3 +89,6 @@ class Settings(BaseSettings):
         self.PDF_DIR.mkdir(parents=True, exist_ok=True)
         self.UPLOAD_DIR.mkdir(exist_ok=True)
         self.LOGS_DIR.mkdir(exist_ok=True)
+        
+        # Registrar inicialización sin exponer variables sensibles
+        logger.info("Settings initialized successfully")
