@@ -361,7 +361,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const data = await response.json();
             
             if (data.error) {
-                addMessage(`Lo siento, no pude encontrar la imagen para ${reference}.`, 'bot');
+                addMessage(`Lo siento, no he podido encontrar la imagen para ${reference}.`, 'bot');
                 return;
             }
             
@@ -394,7 +394,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     });
                 });
             } else {
-                addMessage(`Lo siento, no pude encontrar la imagen para ${reference}.`, 'bot');
+                addMessage(`Lo siento, no he podido encontrar la imagen para ${reference}.`, 'bot');
             }
         } catch (error) {
             console.error('Error al solicitar imagen:', error);
@@ -648,31 +648,22 @@ document.addEventListener('DOMContentLoaded', function() {
             retakePhotoBtn.classList.add('hidden');
             document.body.classList.add('camera-active');
             
+            // Añadir botón de emergencia para cerrar
+            const emergencyBtn = document.createElement('button');
+            emergencyBtn.id = 'emergency-close-camera';
+            emergencyBtn.innerHTML = '<i class="fas fa-times"></i>';
+            emergencyBtn.addEventListener('click', function() {
+                console.log('Botón de emergencia apretado');
+                stopCamera();
+            });
+            cameraPreview.appendChild(emergencyBtn);
+            
             // Evento para cuando la transmisión esté lista
             cameraView.onloadedmetadata = function() {
                 cameraView.play();
             };
         } catch (err) {
             console.error('Error al acceder a la cámara:', err);
-
-            // Añadir botón de emergencia para cerrar
-            const emergencyBtn = document.createElement('button');
-            emergencyBtn.id = 'emergency-close-camera';
-            emergencyBtn.innerHTML = '<i class="fas fa-times"></i>';
-            emergencyBtn.addEventListener('click', function() {
-                console.log('Botón de emergencia presionado');
-                stopCamera();
-            });
-
-            cameraPreview.appendChild(emergencyBtn);
-
-            // Añadir listener para tecla Escape
-            document.addEventListener('keydown', function(e) {
-                if (e.key === 'Escape' && !cameraPreview.classList.contains('hidden')) {
-                    console.log('Tecla Escape presionada - cerrando cámara');
-                    stopCamera();
-                }
-            });
             
             // Mensaje de error más detallado para el usuario
             if (err.name === 'NotAllowedError') {
@@ -684,29 +675,54 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
     }
-
+    
     function stopCamera() {
+        console.log("Intento de parar la cámara");
+        
         // Detener todas las pistas de video
         if (stream) {
-            stream.getTracks().forEach(track => track.stop());
+            const tracks = stream.getTracks();
+            console.log(`Parando ${tracks.length} pistas de video`);
+            
+            tracks.forEach(track => {
+                console.log(`Parando pista: ${track.kind}`);
+                track.stop();
+            });
             stream = null;
+        } else {
+            console.log("No hay stream activo para detener");
+        }
+        
+        // Eliminar botón de emergencia si existe
+        const emergencyBtn = document.getElementById('emergency-close-camera');
+        if (emergencyBtn) {
+            emergencyBtn.remove();
         }
         
         // Ocultar elementos de la cámara
-        cameraPreview.classList.add('hidden');
-        photoCanvas.classList.add('hidden');
+        if (cameraPreview) {
+            cameraPreview.classList.add('hidden');
+        }
+        
+        if (photoCanvas) {
+            photoCanvas.classList.add('hidden');
+        }
+        
+        // Eliminar clase que bloquea el scroll
         document.body.classList.remove('camera-active');
         
         // Limpiar fuente de video
         if (cameraView) {
             cameraView.srcObject = null;
         }
+        
+        console.log("Cámara cerrada completamente");
     }
 
     async function capturePhoto() {
         // Verificar que la cámara está activa
         if (!stream || !cameraView.videoWidth) {
-            alert('La cámara no está lista. Por favor, intenta de nuevo.');
+            alert('La cámara no está lista. Por favor, intentalo de nuevo.');
             return;
         }
         
@@ -798,7 +814,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }, 'image/jpeg', 0.85); // Calidad 85% para mejor balance tamaño/calidad
         } catch (error) {
             console.error('Error al capturar foto:', error);
-            alert('Error al capturar la foto. Por favor, intenta de nuevo.');
+            alert('Error al capturar la foto. Por favor, intentalo de nuevo.');
         }
     }
 
@@ -1126,7 +1142,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (indicator) {
                 const textSpan = indicator.querySelector('span');
                 if (textSpan) {
-                    textSpan.textContent = 'Esto está tomando más tiempo de lo esperado...';
+                    textSpan.textContent = 'Esto está llevando más tiempo de lo esperado...';
                 }
             }
         }, 8000);
@@ -1242,11 +1258,11 @@ document.addEventListener('DOMContentLoaded', function() {
             
             // Mensaje de error más amigable según el tipo de error
             if (error.name === 'AbortError' || error.message.includes('timeout')) {
-                addMessage('La consulta ha tardado demasiado tiempo. Por favor, intenta con una consulta más breve o específica.', 'error');
+                addMessage('La consulta ha tardado demasiado tiempo. Por favor, intentalo con una consulta más corta o específica.', 'error');
             } else if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
-                addMessage('No se pudo conectar con el servidor. Por favor, verifica tu conexión a internet.', 'error');
+                addMessage('No se pudo conectar con el servidor. Por favor, comprueba tu conexión a internet.', 'error');
             } else {
-                addMessage('Ha ocurrido un error al procesar tu consulta. Por favor, intenta nuevamente en unos momentos.', 'error');
+                addMessage('Ha ocurrido un error al procesar tu consulta. Por favor, intentalo de nuevo en unos momentos.', 'error');
             }
         } finally {
             isProcessing = false;

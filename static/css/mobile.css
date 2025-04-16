@@ -136,6 +136,30 @@
     }
 }
 
+/* Mejoras para el camera preview en todos los dispositivos */
+#camera-preview {
+    z-index: 9999 !important;
+    background-color: rgba(0, 0, 0, 0.95) !important;
+}
+
+@media (min-width: 641px) {
+    #camera-preview {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+    
+    .camera-controls {
+        position: absolute !important;
+        bottom: 30px !important;
+        width: 100% !important;
+        display: flex !important;
+        justify-content: center !important;
+        gap: 16px !important;
+    }
+}
+
 /* Optimizaciones para la cámara en dispositivos móviles */
 @media (max-width: 640px) {
     #camera-preview {
