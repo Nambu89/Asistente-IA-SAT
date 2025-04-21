@@ -33,6 +33,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const imageViewerClose = document.getElementById('image-viewer-close');
     const imageViewerDownload = document.getElementById('image-viewer-download');
     const imageViewerCaption = document.getElementById('image-viewer-caption');
+    const API_BASE_URL = window.API_URL || 'https://svania.azurewebsites.net';
 
     // ==================== ESTADO DE LA APLICACIÓN ====================
     let attachments = [];
@@ -55,6 +56,9 @@ document.addEventListener('DOMContentLoaded', function() {
         initSearch();
         initImageViewer();
         checkBrowserSupport();
+        // Asegurarse de que el modal esté oculto al inicio
+        console.log("Inicializando: ocultando modal de confirmación");
+        hideConfirmModal();
     }
 
     // Detector global de tecla Escape para cerrar modales y cámara
@@ -343,7 +347,7 @@ document.addEventListener('DOMContentLoaded', function() {
             chatMessages.scrollTop = chatMessages.scrollHeight;
             
             // Solicitar la imagen al servidor
-            const response = await fetch('/request-image', {
+            const response = await fetch(`${API_BASE_URL}/request-image`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
@@ -467,7 +471,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     async function submitFeedback(messageId, rating, comment) {
         try {
-            const response = await fetch('/api/feedback', {
+            const response = await fetch(`${API_BASE_URL}/api/feedback`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -963,10 +967,12 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function showConfirmModal() {
+        console.log("Mostrando modal de confirmación");
         confirmModal.classList.remove('hidden');
     }
 
     function hideConfirmModal() {
+        console.log("Ocultando modal de confirmación");
         confirmModal.classList.add('hidden');
     }
 
@@ -1195,11 +1201,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
         try {
             if (message) {
+                console.log("Valor del input antes del envío:", message);
                 addMessage(message, 'user');
             } else if (attachments.length > 0) {
+                console.log("Enviando adjuntos sin mensaje de texto");
                 addMessage("Te envío una imagen para analizar", 'user');
             }
             
+            console.log("Limpiando input...");
             userInput.value = '';
             userInput.style.height = 'auto';
             showLoadingIndicator();
@@ -1208,19 +1217,21 @@ document.addEventListener('DOMContentLoaded', function() {
             if (message) formData.append('message', message);
             attachments.forEach(file => formData.append('attachments', file));
 
-            const response = await fetch('/fullchat', {
+            const response = await fetch(`${API_BASE_URL}/fullchat`, {
                 method: 'POST',
                 body: formData,
                 // Tiempo de espera ampliado para consultas complejas
                 timeout: 60000 // 60 segundos
             });
 
-            // Verificar si la solicitud fue exitosa
+            console.log("Respuesta del backend:", response.status);
+            // Verificar si la solicitud fue realizada con éxito
             if (!response.ok) {
                 throw new Error(`Error en la solicitud: ${response.status} ${response.statusText}`);
             }
 
             const data = await response.json();
+            console.log("Datos recibidos:", data);
             hideLoadingIndicator();
 
             if (data.error) {
@@ -1349,7 +1360,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Optimizaciones para dispositivos móviles
     if ('serviceWorker' in navigator && window.innerWidth <= 768) {
         window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/sw.js').then(
+            navigator.serviceWorker.register('/static/js/sw.js').then(
                 registration => console.log('ServiceWorker registrado con éxito'),
                 error => console.log('Error al registrar ServiceWorker:', error)
             );

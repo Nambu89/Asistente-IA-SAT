@@ -26,13 +26,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8000 \
     PYTHONPATH=/app
 
-# Instalar dependencias del sistema incluyendo curl para healthcheck
+# Instalar dependencias del sistema incluyendo herramientas de depuración
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     pkg-config \
     libmagic1 \
     procps \
+    net-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # Instalar Tesseract OCR y dependencias para procesamiento de imágenes
@@ -85,7 +86,7 @@ USER appuser
 EXPOSE 8000
 
 # Verificar la salud de la aplicación con tiempo de inicio más amplio
-HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=240s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Usar el script de inicio

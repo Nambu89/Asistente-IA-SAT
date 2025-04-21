@@ -33,6 +33,10 @@
         if (localStorage.getItem('darkMode') === 'true') {
             document.documentElement.classList.add('dark');
         }
+
+        // Configurar la URL del backend dinámicamente
+        window.API_URL = window.location.protocol + '//' + window.location.host;
+        console.log("API_URL configurada como:", window.API_URL);
     </script>
     
     <style>

@@ -23,13 +23,15 @@ const CACHE_ASSETS = [
 
 // Instalar el Service Worker
 self.addEventListener('install', (event) => {
+  console.log('Service Worker: Instalando...');
   event.waitUntil(
     caches.open(CACHE_NAME)
       .then((cache) => {
-        console.log('Caché abierta');
+        console.log('Service Worker: Caché abierta');
         return cache.addAll(CACHE_ASSETS);
       })
       .then(() => {
+        console.log('Service Worker: Recursos almacenados en caché');
         // Forzar la activación inmediata
         return self.skipWaiting();
       })
@@ -38,18 +40,20 @@ self.addEventListener('install', (event) => {
 
 // Activar el Service Worker
 self.addEventListener('activate', (event) => {
+  console.log('Service Worker: Activando...');
   event.waitUntil(
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((cacheName) => {
           // Eliminar cachés antiguas
           if (cacheName !== CACHE_NAME) {
-            console.log('Eliminando caché antigua:', cacheName);
+            console.log('Service Worker: Eliminando caché antigua:', cacheName);
             return caches.delete(cacheName);
           }
         })
       );
     }).then(() => {
+      console.log('Service Worker: Activado');
       // Garantizar que el SW se active inmediatamente en todos los clientes
       return self.clients.claim();
     })
@@ -66,9 +70,11 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.startsWith('/api/') || 
       url.pathname.startsWith('/chat') || 
       url.pathname.startsWith('/fullchat')) {
+    console.log('Service Worker: Ignorando petición a:', url.pathname);
     return;
   }
 
+  console.log('Service Worker: Manejando petición:', url.pathname);
   event.respondWith(
     caches.match(event.request)
       .then((cachedResponse) => {
@@ -80,16 +86,18 @@ self.addEventListener('fetch', (event) => {
               const responseClone = networkResponse.clone();
               caches.open(CACHE_NAME)
                 .then((cache) => {
+                  console.log('Service Worker: Actualizando caché para:', event.request.url);
                   cache.put(event.request, responseClone);
                 });
             }
             return networkResponse;
           })
           .catch((error) => {
-            console.log('Error en fetch:', error);
+            console.log('Service Worker: Error en fetch:', error);
             
             // Si la solicitud es para una página HTML, mostrar la página offline
             if (event.request.headers.get('Accept').includes('text/html')) {
+              console.log('Service Worker: Sirviendo página offline');
               return caches.match(OFFLINE_URL);
             }
             
@@ -109,6 +117,7 @@ self.addEventListener('fetch', (event) => {
 // Manejo de mensajes desde los clientes
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') {
+    console.log('Service Worker: Recibido mensaje SKIP_WAITING');
     self.skipWaiting();
   }
 });
