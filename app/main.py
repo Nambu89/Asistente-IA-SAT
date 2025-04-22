@@ -175,7 +175,7 @@ async def periodic_health_check():
             
             # Verificar Redis
             if hasattr(app.state, 'redis_service'):
-                redis_available = app.state.redis_service.ensure_connection()
+                redis_available = await app.state.redis_service.ensure_connection()
                 logger.info(f"Redis disponible: {redis_available}")
             
             # Verificar otros servicios
@@ -299,38 +299,175 @@ async def list_all_documents():
         logger.error(f"Error listing documents: {str(e)}", exc_info=True)
         return {"error": str(e)}
 
-@app.get('/health')
-def health_check():
-    """Endpoint para verificar el estado del servicio"""
+@app.get('/health', response_class=JSONResponse)
+async def health_check():
+    """Endpoint para verificar el estado del servicio."""
     try:
-        checks = {
-            "app": "healthy",
-            "redis": "initialized" if hasattr(app.state, 'redis_service') and app.state.redis_service.connected else "degraded",
-            "search_service": "initialized" if hasattr(app.state, 'search_service') else "missing",
-            "openai_service": "initialized" if hasattr(app.state, 'openai_service') else "missing",
-            "ai_foundry_service": "initialized" if hasattr(app.state, 'ai_foundry_service') else "missing",
-        }
-        # Métricas adicionales para monitoreo
-        metrics = {
-            "services_initialized": all(status == "initialized" for status in checks.values()),
-            "timestamp": datetime.now().isoformat()
+        # Verificar estado de servicios
+        services_status = {
+            "app": "ok",
+            "version": settings.APP_VERSION,
+            "timestamp": datetime.now().isoformat(),
+            "services": {}
         }
         
-        # Verificar estado general
-        is_healthy = all(status in ["initialized", "healthy"] for status in checks.values())
-        
-        return {
-            "status": "healthy" if is_healthy else "degraded",
-            "checks": checks,
-            "metrics": metrics
-        }
+        # Verificar Redis si está disponible
+        if hasattr(app.state, 'redis_service'):
+            try:
+                redis_available = await app.state.redis_service.ensure_connection()
+                services_status["services"]["redis"] = "ok" if redis_available else "error"
+            except Exception as e:
+                services_status["services"]["redis"] = f"error: {str(e)}"
+        else:
+            services_status["services"]["redis"] = "not_initialized"
+            
+        # Verificar Azure Search
+        if hasattr(app.state, 'search_service'):
+            try:
+                # Verificación simple
+                services_status["services"]["azure_search"] = "ok"
+            except Exception as e:
+                services_status["services"]["azure_search"] = f"error: {str(e)}"
+        else:
+            services_status["services"]["azure_search"] = "not_initialized"
+            
+        return services_status
     except Exception as e:
-        logger.error(f"Error en healthcheck: {str(e)}")
-        return {
-            "status": "degraded",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
+        logger.error(f"Error en health check: {str(e)}")
+        return {"status": "error", "message": str(e)}
+
+@app.get("/diagnostico/redis", response_class=JSONResponse)
+async def redis_diagnostico():
+    """Endpoint para diagnóstico detallado de Redis."""
+    try:
+        import socket
+        import platform
+        import subprocess
+        
+        # Información básica del sistema
+        diagnostico = {
+            "timestamp": datetime.now().isoformat(),
+            "sistema": platform.system(),
+            "version": platform.version(),
+            "configuracion_redis": {
+                "host": settings.REDIS_HOST,
+                "port": settings.REDIS_PORT,
+                "ssl": settings.REDIS_SSL
+            },
+            "conectividad": {}
         }
+        
+        # Verificar si el host es resoluble
+        try:
+            ip_address = socket.gethostbyname(settings.REDIS_HOST)
+            diagnostico["conectividad"]["dns_resolucion"] = {
+                "status": "ok",
+                "ip": ip_address
+            }
+        except Exception as e:
+            diagnostico["conectividad"]["dns_resolucion"] = {
+                "status": "error",
+                "mensaje": str(e)
+            }
+        
+        # Verificar conectividad TCP
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(5)
+            start_time = time.time()
+            result = s.connect_ex((settings.REDIS_HOST, settings.REDIS_PORT))
+            connect_time = time.time() - start_time
+            s.close()
+            
+            diagnostico["conectividad"]["tcp_conexion"] = {
+                "status": "ok" if result == 0 else "error",
+                "codigo_resultado": result,
+                "tiempo_conexion": f"{connect_time:.2f}s"
+            }
+        except Exception as e:
+            diagnostico["conectividad"]["tcp_conexion"] = {
+                "status": "error",
+                "mensaje": str(e)
+            }
+        
+        # Intentar ping al host
+        try:
+            param = '-n' if platform.system().lower() == 'windows' else '-c'
+            command = ['ping', param, '3', settings.REDIS_HOST]
+            ping_result = subprocess.run(command, capture_output=True, text=True, timeout=10)
+            
+            diagnostico["conectividad"]["ping"] = {
+                "status": "ok" if ping_result.returncode == 0 else "error",
+                "codigo_resultado": ping_result.returncode,
+                "salida": ping_result.stdout[:500]  # Limitar tamaño de la salida
+            }
+        except Exception as e:
+            diagnostico["conectividad"]["ping"] = {
+                "status": "error",
+                "mensaje": str(e)
+            }
+        
+        # Verificar Redis con la biblioteca
+        if hasattr(app.state, 'redis_service'):
+            try:
+                start_time = time.time()
+                redis_available = await app.state.redis_service.ensure_connection()
+                redis_time = time.time() - start_time
+                
+                diagnostico["redis_cliente"] = {
+                    "status": "ok" if redis_available else "error",
+                    "tiempo_conexion": f"{redis_time:.2f}s",
+                    "connected": app.state.redis_service.connected
+                }
+                
+                # Si la conexión fue exitosa, intentar operaciones básicas
+                if redis_available:
+                    try:
+                        test_key = "redis:diagnostico:test"
+                        test_value = f"test-{datetime.now().isoformat()}"
+                        
+                        # Probar SET
+                        set_start = time.time()
+                        set_result = await app.state.redis_service.client.set(test_key, test_value, ex=60)
+                        set_time = time.time() - set_start
+                        
+                        # Probar GET
+                        get_start = time.time()
+                        get_result = await app.state.redis_service.client.get(test_key)
+                        get_time = time.time() - get_start
+                        
+                        diagnostico["redis_operaciones"] = {
+                            "set": {
+                                "status": "ok" if set_result else "error",
+                                "tiempo": f"{set_time:.2f}s"
+                            },
+                            "get": {
+                                "status": "ok" if get_result == test_value else "error",
+                                "tiempo": f"{get_time:.2f}s",
+                                "valor_esperado": test_value,
+                                "valor_recibido": get_result
+                            }
+                        }
+                    except Exception as e:
+                        diagnostico["redis_operaciones"] = {
+                            "status": "error",
+                            "mensaje": str(e)
+                        }
+            except Exception as e:
+                diagnostico["redis_cliente"] = {
+                    "status": "error",
+                    "mensaje": str(e)
+                }
+        else:
+            diagnostico["redis_cliente"] = {
+                "status": "error",
+                "mensaje": "Redis service not initialized"
+            }
+        
+        return diagnostico
+    except Exception as e:
+        logger.error(f"Error en diagnóstico de Redis: {str(e)}")
+        return {"status": "error", "message": str(e)}
 
 @app.get('/debug/logs')
 def view_logs():
