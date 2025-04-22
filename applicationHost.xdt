@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<configuration xmlns:xdt="http://schemas.microsoft.com/XML-Document-Transform">
+  <system.webServer>
+    <httpProtocol>
+      <customHeaders>
+        <add name="X-Content-Type-Options" value="nosniff" xdt:Transform="InsertIfMissing" />
+        <add name="X-Frame-Options" value="SAMEORIGIN" xdt:Transform="InsertIfMissing" />
+        <add name="X-XSS-Protection" value="1; mode=block" xdt:Transform="InsertIfMissing" />
+        <remove name="X-Powered-By" xdt:Transform="InsertIfMissing" />
+        <remove name="Server" xdt:Transform="InsertIfMissing" />
+      </customHeaders>
+    </httpProtocol>
+    <security>
+      <requestFiltering removeServerHeader="true" xdt:Transform="SetAttributes" />
+    </security>
+  </system.webServer>
+</configuration>

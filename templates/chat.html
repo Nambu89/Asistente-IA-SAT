@@ -6,6 +6,19 @@
     <meta name="theme-color" content="#2563eb">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <!-- Usar un enfoque más suave para evitar bucles de redirección -->
+    <script>
+        // Redirigir a HTTPS solo si es necesario y no estamos en desarrollo local
+        if (window.location.protocol === 'http:' && 
+            window.location.hostname !== 'localhost' && 
+            window.location.hostname !== '127.0.0.1' &&
+            !sessionStorage.getItem('redirectAttempted')) {
+            // Marcar que ya intentamos una redirección para evitar bucles
+            sessionStorage.setItem('redirectAttempted', 'true');
+            window.location.href = window.location.href.replace('http:', 'https:');
+        }
+    </script>
     <title>SvanIA - Asistente Técnico SVAN</title>
     
     <!-- Favicon e íconos -->
@@ -15,7 +28,7 @@
     <!-- CSS y recursos externos -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.7.0/styles/github-dark.min.css">
-    <link rel="stylesheet" href="{{ url_for('static', path='/css/styles.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', path='css/styles.min.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', path='/css/mobile.css') }}">
     
     <!-- Scripts externos -->
@@ -34,9 +47,41 @@
             document.documentElement.classList.add('dark');
         }
 
-        // Configurar la URL del backend dinámicamente
-        window.API_URL = window.location.protocol + '//' + window.location.host;
+        // Configurar la URL de la API forzando HTTPS en producción
+        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+            window.API_URL = window.location.protocol + '//' + window.location.host;
+        } else {
+            // Forzar HTTPS en producción
+            window.API_URL = 'https://' + window.location.host;
+        }
         console.log("API_URL configurada como:", window.API_URL);
+        
+        // Deshabilitar la cámara de forma silenciosa
+        window.DISABLE_CAMERA = true;
+        
+        // Función discreta para asegurar que la cámara esté deshabilitada
+        function silentlyDisableCamera() {
+            // Ocultar el div de la cámara sin notificaciones
+            var cameraPreview = document.getElementById('camera-preview');
+            if (cameraPreview) {
+                cameraPreview.style.display = 'none';
+                cameraPreview.classList.add('hidden');
+            }
+            
+            // Detener cualquier stream de video activo sin mensajes
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                navigator.mediaDevices.getUserMedia({ video: true })
+                    .then(function(stream) {
+                        stream.getTracks().forEach(function(track) {
+                            track.stop();
+                        });
+                    })
+                    .catch(function() {});
+            }
+        }
+        
+        // Ejecutar discretamente al cargar
+        window.addEventListener('DOMContentLoaded', silentlyDisableCamera);
     </script>
     
     <style>
@@ -254,22 +299,9 @@
             <div class="chat-controls border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
                 <div id="attachments-preview" class="hidden px-4 py-2 bg-gray-50 dark:bg-gray-700"></div>
                 
-                <!-- Previsualización de cámara -->
-                <div id="camera-preview" class="fixed inset-0 bg-black bg-opacity-90 z-50 flex-col items-center justify-center hidden">
-                    <video id="camera-view" class="w-full max-h-[70vh] rounded-lg" autoplay playsinline></video>
-                    <div class="camera-controls mt-4 flex justify-center gap-3">
-                        <button id="capture-photo" class="bg-blue-600 text-white px-4 py-2 rounded-lg">
-                            <i class="fas fa-camera mr-1"></i> Capturar
-                        </button>
-                        <button id="retake-photo" class="bg-gray-600 text-white px-4 py-2 rounded-lg hidden">
-                            <i class="fas fa-redo mr-1"></i> Repetir
-                        </button>
-                        <button id="cancel-photo" class="bg-red-600 text-white px-4 py-2 rounded-lg">
-                            <i class="fas fa-times mr-1"></i> Cancelar
-                        </button>
-                    </div>
-                    <canvas id="photo-canvas" class="hidden"></canvas>
-                </div>
+                <!-- Previsualización de cámara - DESHABILITADA -->
+                <!-- La funcionalidad de cámara ha sido deshabilitada para resolver problemas -->
+                <div id="camera-preview" style="display:none !important;" class="hidden"></div>
                 
                 <!-- Controles de entrada -->
                 <div class="flex gap-2 items-center p-3">
@@ -277,9 +309,11 @@
                         <button type="button" id="attach-file" class="text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700" title="Adjuntar archivo">
                             <i class="fas fa-paperclip"></i>
                         </button>
+                        <!-- Botón de cámara deshabilitado temporalmente
                         <button type="button" id="take-photo" class="text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700" title="Tomar foto">
                             <i class="fas fa-camera"></i>
                         </button>
+                        -->
                     </div>
                     <input type="file" id="file-input" class="hidden" multiple accept="image/*,application/pdf,text/plain">
                     <textarea id="user-input" rows="1" style="resize: none;" class="flex-1 p-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white dark:border-gray-600" placeholder="Escribe tu mensaje..."></textarea>

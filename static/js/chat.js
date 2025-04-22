@@ -1,3 +1,6 @@
+// Variable global para controlar si la cámara debe estar deshabilitada completamente
+window.DISABLE_CAMERA = true; // Establecer a true para deshabilitar completamente la cámara
+
 document.addEventListener('DOMContentLoaded', function() {
     // ==================== ELEMENTOS DEL DOM ====================
     const chatMessages = document.getElementById('chat-messages');
@@ -33,7 +36,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const imageViewerClose = document.getElementById('image-viewer-close');
     const imageViewerDownload = document.getElementById('image-viewer-download');
     const imageViewerCaption = document.getElementById('image-viewer-caption');
-    const API_BASE_URL = window.API_URL || 'https://svania.azurewebsites.net';
+    const API_BASE_URL = ensureHttps(window.API_URL || 'https://svania.azurewebsites.net');
 
     // ==================== ESTADO DE LA APLICACIÓN ====================
     let attachments = [];
@@ -46,6 +49,50 @@ document.addEventListener('DOMContentLoaded', function() {
     let isProcessing = false;
     let typingTimer = null;
     let isUserTyping = false;
+    let cameraActive = false;
+
+    // Función para asegurar que las URLs sean HTTPS en producción
+    function ensureHttps(url) {
+        if (!url) return url;
+        
+        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+            return url; // Mantener URL original en desarrollo local
+        } else {
+            // Convertir a HTTPS en producción
+            return url.replace(/^http:\/\//i, 'https://');
+        }
+    }
+    
+    // Función para asegurar que todas las imágenes y recursos usen HTTPS
+    function secureAllResources() {
+        // Asegurar que todas las imágenes usen HTTPS
+        document.querySelectorAll('img').forEach(img => {
+            if (img.src) {
+                img.src = ensureHttps(img.src);
+            }
+        });
+        
+        // Asegurar que todos los enlaces usen HTTPS
+        document.querySelectorAll('a').forEach(a => {
+            if (a.href) {
+                a.href = ensureHttps(a.href);
+            }
+        });
+        
+        // Asegurar que todos los scripts usen HTTPS
+        document.querySelectorAll('script').forEach(script => {
+            if (script.src) {
+                script.src = ensureHttps(script.src);
+            }
+        });
+        
+        // Asegurar que todas las hojas de estilo usen HTTPS
+        document.querySelectorAll('link').forEach(link => {
+            if (link.href) {
+                link.href = ensureHttps(link.href);
+            }
+        });
+    }
 
     // ==================== INICIALIZACIÓN ====================
     function init() {
@@ -56,27 +103,57 @@ document.addEventListener('DOMContentLoaded', function() {
         initSearch();
         initImageViewer();
         checkBrowserSupport();
+        
         // Asegurarse de que el modal esté oculto al inicio
         console.log("Inicializando: ocultando modal de confirmación");
         hideConfirmModal();
+        
+        // Asegurar que todos los recursos usen HTTPS
+        secureAllResources();
+        
+        // Mecanismo de seguridad para evitar que la cámara se inicie automáticamente
+        console.log("Verificando estado de la cámara al inicio...");
+        if (cameraActive || stream) {
+            console.warn("¡Cámara activa al inicio! Cerrando...");
+            stopCamera();
+        }
+        
+        // Asegurarse de que los elementos de la cámara estén ocultos al inicio
+        if (cameraPreview) {
+            cameraPreview.classList.add('hidden');
+            cameraPreview.style.display = 'none';
+        }
+        
+        // Establecer un timeout para verificar nuevamente después de un breve retraso
+        // Esto ayuda en caso de que la inicialización de la cámara ocurra después de init()
+        setTimeout(() => {
+            if (cameraActive || stream || 
+                (cameraPreview && !cameraPreview.classList.contains('hidden'))) {
+                console.warn("¡Cámara activa después de la inicialización! Cerrando...");
+                stopCamera();
+            }
+        }, 1000);
     }
 
     // Detector global de tecla Escape para cerrar modales y cámara
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
             // Si la cámara está abierta
-            if (!cameraPreview.classList.contains('hidden')) {
+            if (cameraActive || (cameraPreview && !cameraPreview.classList.contains('hidden'))) {
                 console.log('Escape global - cerrando cámara');
                 stopCamera();
+                return;
             }
             
             // También cerrar otros modales si están abiertos
             if (!confirmModal.classList.contains('hidden')) {
                 hideConfirmModal();
+                return;
             }
             
             if (!imageViewerModal.classList.contains('hidden')) {
                 closeImageViewer();
+                return;
             }
         }
     });
@@ -160,18 +237,10 @@ document.addEventListener('DOMContentLoaded', function() {
         attachFileBtn.addEventListener('click', () => fileInput.click());
         fileInput.addEventListener('change', handleFileSelect);
 
-        // Eventos para la cámara
-        if (takePhotoBtn) {
-            takePhotoBtn.addEventListener('click', startCamera);
-        }
-        if (capturePhotoBtn) {
-            capturePhotoBtn.addEventListener('click', capturePhoto);
-        }
-        if (retakePhotoBtn) {
-            retakePhotoBtn.addEventListener('click', retakePhoto);
-        }
-        if (cancelPhotoBtn) {
-            cancelPhotoBtn.addEventListener('click', stopCamera);
+        // Eventos para la cámara - silenciosamente deshabilitados
+        if (cameraPreview) {
+            cameraPreview.style.display = 'none';
+            cameraPreview.classList.add('hidden');
         }
 
         // Cambio de tema
@@ -347,7 +416,8 @@ document.addEventListener('DOMContentLoaded', function() {
             chatMessages.scrollTop = chatMessages.scrollHeight;
             
             // Solicitar la imagen al servidor
-            const response = await fetch(`${API_BASE_URL}/request-image`, {
+            const apiUrl = ensureHttps(`${API_BASE_URL}/request-image`);
+            const response = await fetch(apiUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
@@ -623,104 +693,333 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // ==================== GESTIÓN DE LA CÁMARA ====================
     async function startCamera() {
+        // Función silenciosamente deshabilitada
+        stopCamera();
+        return;
+        
+        // El código siguiente nunca se ejecutará
         try {
             // Verificar si el navegador soporta la API
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                alert('Tu navegador no soporta acceso a la cámara');
+                showToast('Tu navegador no soporta acceso a la cámara', 'error');
+                window._startingCamera = false;
                 return;
             }
             
             // Verificar si ya hay una sesión de cámara activa
-            if (stream) {
+            if (stream || cameraActive) {
+                console.log('Cámara ya activa, cerrando primero...');
                 stopCamera();
+                // Esperar un momento antes de volver a intentar
+                setTimeout(() => {
+                    window._startingCamera = false;
+                    startCamera();
+                }, 500);
+                return;
             }
             
-            // Solicitar acceso a la cámara trasera si está disponible
-            stream = await navigator.mediaDevices.getUserMedia({
-                video: { 
-                    facingMode: 'environment',
-                    width: { ideal: 1920 },
-                    height: { ideal: 1080 }
-                },
-                audio: false
-            });
+            console.log('Solicitando acceso a la cámara...');
+            showToast('Iniciando cámara...', 'info');
             
-            // Configurar vista previa
-            cameraView.srcObject = stream;
-            cameraPreview.classList.remove('hidden');
-            capturePhotoBtn.classList.remove('hidden');
-            retakePhotoBtn.classList.add('hidden');
-            document.body.classList.add('camera-active');
+            // Asegurarse de que el elemento de previsualización esté visible
+            if (cameraPreview) {
+                cameraPreview.classList.remove('hidden');
+                cameraPreview.style.display = 'flex';
+            }
             
-            // Añadir botón de emergencia para cerrar
+            // BOTÓN DE EMERGENCIA GIGANTE - Añadir antes de iniciar la cámara
+            // Esto garantiza que siempre haya un botón para cerrar, incluso si hay problemas con la cámara
+            const emergencyOverlay = document.createElement('div');
+            emergencyOverlay.id = 'emergency-camera-overlay';
+            emergencyOverlay.style.position = 'fixed';
+            emergencyOverlay.style.top = '0';
+            emergencyOverlay.style.left = '0';
+            emergencyOverlay.style.width = '100%';
+            emergencyOverlay.style.height = '100%';
+            emergencyOverlay.style.backgroundColor = 'rgba(0,0,0,0.3)';
+            emergencyOverlay.style.zIndex = '10000';
+            emergencyOverlay.style.display = 'flex';
+            emergencyOverlay.style.flexDirection = 'column';
+            emergencyOverlay.style.justifyContent = 'center';
+            emergencyOverlay.style.alignItems = 'center';
+            
             const emergencyBtn = document.createElement('button');
             emergencyBtn.id = 'emergency-close-camera';
-            emergencyBtn.innerHTML = '<i class="fas fa-times"></i>';
-            emergencyBtn.addEventListener('click', function() {
-                console.log('Botón de emergencia apretado');
+            emergencyBtn.innerHTML = '<i class="fas fa-times"></i> CERRAR CÁMARA';
+            emergencyBtn.style.backgroundColor = '#ef4444';
+            emergencyBtn.style.color = 'white';
+            emergencyBtn.style.width = '80%';
+            emergencyBtn.style.maxWidth = '300px';
+            emergencyBtn.style.padding = '20px';
+            emergencyBtn.style.borderRadius = '8px';
+            emergencyBtn.style.border = '3px solid white';
+            emergencyBtn.style.fontSize = '1.5rem';
+            emergencyBtn.style.fontWeight = 'bold';
+            emergencyBtn.style.cursor = 'pointer';
+            emergencyBtn.style.boxShadow = '0 8px 16px rgba(0, 0, 0, 0.5)';
+            emergencyBtn.style.marginBottom = '20px';
+            
+            emergencyBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('Botón de emergencia gigante apretado');
+                stopCamera();
+                // Deshabilitar la cámara globalmente para evitar futuros problemas
+                window.DISABLE_CAMERA = true;
+                showToast('La cámara ha sido deshabilitada para esta sesión', 'warning');
+            });
+            
+            const emergencyText = document.createElement('div');
+            emergencyText.innerHTML = 'Si tienes problemas, pulsa el botón rojo';
+            emergencyText.style.color = 'white';
+            emergencyText.style.fontSize = '1.2rem';
+            emergencyText.style.textAlign = 'center';
+            emergencyText.style.marginTop = '10px';
+            emergencyText.style.textShadow = '0 0 5px black';
+            
+            emergencyOverlay.appendChild(emergencyBtn);
+            emergencyOverlay.appendChild(emergencyText);
+            document.body.appendChild(emergencyOverlay);
+            
+            // Solicitar acceso a la cámara trasera si está disponible
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { 
+                        facingMode: 'environment',
+                        width: { ideal: 1920 },
+                        height: { ideal: 1080 }
+                    },
+                    audio: false
+                });
+            } catch (err) {
+                console.error('Error al acceder a la cámara:', err);
+                // No lanzar el error aquí, seguir con el código para que se muestren los botones de emergencia
+                showToast('Error al acceder a la cámara. Usa el botón rojo para cerrar.', 'error', 5000);
+            }
+            
+            // Configurar vista previa solo si tenemos stream
+            if (stream && cameraView) {
+                cameraView.srcObject = stream;
+                cameraView.style.display = 'block';
+                
+                if (capturePhotoBtn) capturePhotoBtn.classList.remove('hidden');
+                if (retakePhotoBtn) retakePhotoBtn.classList.add('hidden');
+            }
+            
+            document.body.classList.add('camera-active');
+            cameraActive = true;
+            
+            // Añadir también botones normales de cierre como respaldo
+            const regularCloseBtn = document.createElement('button');
+            regularCloseBtn.id = 'regular-close-camera';
+            regularCloseBtn.innerHTML = '<i class="fas fa-times"></i> Cerrar';
+            regularCloseBtn.style.position = 'absolute';
+            regularCloseBtn.style.top = '20px';
+            regularCloseBtn.style.right = '20px';
+            regularCloseBtn.style.backgroundColor = '#ef4444';
+            regularCloseBtn.style.color = 'white';
+            regularCloseBtn.style.width = 'auto';
+            regularCloseBtn.style.height = 'auto';
+            regularCloseBtn.style.padding = '10px 15px';
+            regularCloseBtn.style.borderRadius = '8px';
+            regularCloseBtn.style.border = '2px solid white';
+            regularCloseBtn.style.display = 'flex';
+            regularCloseBtn.style.alignItems = 'center';
+            regularCloseBtn.style.justifyContent = 'center';
+            regularCloseBtn.style.zIndex = '10002'; // Mayor que el overlay
+            regularCloseBtn.style.cursor = 'pointer';
+            regularCloseBtn.style.fontSize = '1rem';
+            regularCloseBtn.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.3)';
+            
+            regularCloseBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('Botón regular de cierre presionado');
                 stopCamera();
             });
-            cameraPreview.appendChild(emergencyBtn);
+            
+            // Añadir también un botón en la parte inferior para dispositivos grandes
+            const bottomCloseBtn = document.createElement('button');
+            bottomCloseBtn.id = 'bottom-close-camera';
+            bottomCloseBtn.innerHTML = 'Cancelar y cerrar cámara';
+            bottomCloseBtn.style.position = 'absolute';
+            bottomCloseBtn.style.bottom = '20px';
+            bottomCloseBtn.style.left = '50%';
+            bottomCloseBtn.style.transform = 'translateX(-50%)';
+            bottomCloseBtn.style.backgroundColor = '#ef4444';
+            bottomCloseBtn.style.color = 'white';
+            bottomCloseBtn.style.padding = '12px 20px';
+            bottomCloseBtn.style.borderRadius = '8px';
+            bottomCloseBtn.style.border = 'none';
+            bottomCloseBtn.style.zIndex = '10002'; // Mayor que el overlay
+            bottomCloseBtn.style.cursor = 'pointer';
+            bottomCloseBtn.style.fontSize = '1rem';
+            bottomCloseBtn.style.marginTop = '10px';
+            
+            bottomCloseBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('Botón inferior de cierre presionado');
+                stopCamera();
+            });
+            
+            if (cameraPreview) {
+                cameraPreview.appendChild(regularCloseBtn);
+                cameraPreview.appendChild(bottomCloseBtn);
+            }
             
             // Evento para cuando la transmisión esté lista
-            cameraView.onloadedmetadata = function() {
-                cameraView.play();
+            if (cameraView && stream) {
+                cameraView.onloadedmetadata = function() {
+                    cameraView.play();
+                    showToast('Cámara activada. Pulsa CERRAR CÁMARA si tienes problemas.', 'success');
+                };
+            }
+            
+            // Añadir listener de tecla Escape específico para la cámara
+            const escKeyHandler = function(e) {
+                if (e.key === 'Escape') {
+                    console.log('Tecla Escape detectada mientras la cámara está activa');
+                    stopCamera();
+                }
             };
+            
+            document.addEventListener('keydown', escKeyHandler);
+            
+            // Guardar referencia para poder eliminarlo después
+            window._cameraEscHandler = escKeyHandler;
+            
+            console.log("Interfaz de cámara iniciada con controles de emergencia");
         } catch (err) {
-            console.error('Error al acceder a la cámara:', err);
+            console.error('Error general al iniciar la cámara:', err);
+            cameraActive = false;
             
             // Mensaje de error más detallado para el usuario
-            if (err.name === 'NotAllowedError') {
-                alert('No se ha permitido el acceso a la cámara. Por favor, acepta los permisos para utilizar esta función.');
-            } else if (err.name === 'NotFoundError') {
-                alert('No se ha encontrado ninguna cámara en tu dispositivo.');
-            } else {
-                alert('Error al acceder a la cámara: ' + err.message);
+            showToast('Error al iniciar la cámara: ' + err.message, 'error', 5000);
+            
+            // Intentar limpiar todo en caso de error
+            if (cameraPreview) {
+                cameraPreview.classList.add('hidden');
+                cameraPreview.style.display = 'none';
             }
+            
+            // Eliminar overlay de emergencia si existe
+            const emergencyOverlay = document.getElementById('emergency-camera-overlay');
+            if (emergencyOverlay) {
+                emergencyOverlay.remove();
+            }
+        } finally {
+            // Siempre limpiar el flag de inicialización
+            window._startingCamera = false;
         }
     }
     
     function stopCamera() {
         console.log("Intento de parar la cámara");
         
-        // Detener todas las pistas de video
-        if (stream) {
-            const tracks = stream.getTracks();
-            console.log(`Parando ${tracks.length} pistas de video`);
+        // Forzar la detención de todas las pistas de video activas en el navegador
+        try {
+            // Primero intentar con nuestro stream conocido
+            if (stream) {
+                const tracks = stream.getTracks();
+                console.log(`Parando ${tracks.length} pistas de video conocidas`);
+                
+                tracks.forEach(track => {
+                    console.log(`Parando pista: ${track.kind}`);
+                    track.stop();
+                });
+                stream = null;
+            }
             
-            tracks.forEach(track => {
-                console.log(`Parando pista: ${track.kind}`);
-                track.stop();
-            });
-            stream = null;
-        } else {
-            console.log("No hay stream activo para detener");
+            // Como medida adicional, intentar detener TODAS las pistas de video activas
+            // Esto ayudará en caso de que haya streams que no estamos siguiendo correctamente
+            navigator.mediaDevices.getUserMedia({ audio: false, video: true })
+                .then(tempStream => {
+                    tempStream.getTracks().forEach(track => track.stop());
+                })
+                .catch(() => console.log('No se pudieron obtener streams adicionales'));
+        } catch (e) {
+            console.error("Error al detener pistas de video:", e);
         }
         
-        // Eliminar botón de emergencia si existe
-        const emergencyBtn = document.getElementById('emergency-close-camera');
-        if (emergencyBtn) {
-            emergencyBtn.remove();
+        // Siempre ejecutar esta lógica, independientemente de si había stream o no
+        try {
+            // Eliminar el manejador de eventos de teclado específico para la cámara
+            if (window._cameraEscHandler) {
+                document.removeEventListener('keydown', window._cameraEscHandler);
+                window._cameraEscHandler = null;
+                console.log('Manejador de tecla Escape para cámara eliminado');
+            }
+            
+            // Eliminar overlay de emergencia si existe
+            const emergencyOverlay = document.getElementById('emergency-camera-overlay');
+            if (emergencyOverlay) {
+                emergencyOverlay.remove();
+                console.log('Overlay de emergencia eliminado');
+            }
+            
+            // Eliminar botón de emergencia si existe
+            const emergencyBtn = document.getElementById('emergency-close-camera');
+            if (emergencyBtn) {
+                emergencyBtn.remove();
+            }
+            
+            // Eliminar botón regular si existe
+            const regularCloseBtn = document.getElementById('regular-close-camera');
+            if (regularCloseBtn) {
+                regularCloseBtn.remove();
+            }
+            
+            // Eliminar botón inferior si existe
+            const bottomCloseBtn = document.getElementById('bottom-close-camera');
+            if (bottomCloseBtn) {
+                bottomCloseBtn.remove();
+            }
+            
+            // Ocultar elementos de la cámara - usar display:none además de hidden para mayor seguridad
+            if (cameraPreview) {
+                cameraPreview.classList.add('hidden');
+                cameraPreview.style.display = 'none';
+            }
+            
+            if (photoCanvas) {
+                photoCanvas.classList.add('hidden');
+            }
+            
+            // Eliminar clase que bloquea el scroll
+            document.body.classList.remove('camera-active');
+            
+            // Limpiar fuente de video
+            if (cameraView) {
+                cameraView.srcObject = null;
+                cameraView.pause();
+            }
+            
+            // Restablecer el estado
+            cameraActive = false;
+            
+            // Mostrar mensaje para confirmar al usuario que la cámara se ha cerrado
+            showToast('Cámara desactivada correctamente', 'success');
+            
+            console.log("Cámara cerrada completamente");
+        } catch (e) {
+            console.error("Error al limpiar interfaz de cámara:", e);
+            // Intentar forzar el cierre incluso si hay errores
+            cameraActive = false;
+            if (cameraPreview) cameraPreview.style.display = 'none';
+            
+            // Intento final de emergencia para eliminar el overlay
+            try {
+                const emergencyOverlay = document.getElementById('emergency-camera-overlay');
+                if (emergencyOverlay) emergencyOverlay.remove();
+                
+                // Eliminar todos los botones relacionados con la cámara
+                const cameraBtns = document.querySelectorAll('[id$="-camera"]');
+                cameraBtns.forEach(btn => btn.remove());
+            } catch (finalError) {
+                console.error('Error en el intento final de limpieza:', finalError);
+            }
         }
-        
-        // Ocultar elementos de la cámara
-        if (cameraPreview) {
-            cameraPreview.classList.add('hidden');
-        }
-        
-        if (photoCanvas) {
-            photoCanvas.classList.add('hidden');
-        }
-        
-        // Eliminar clase que bloquea el scroll
-        document.body.classList.remove('camera-active');
-        
-        // Limpiar fuente de video
-        if (cameraView) {
-            cameraView.srcObject = null;
-        }
-        
-        console.log("Cámara cerrada completamente");
     }
 
     async function capturePhoto() {
@@ -761,57 +1060,70 @@ document.addEventListener('DOMContentLoaded', function() {
                     loadingMsg.id = 'ocr-loading';
                     document.querySelector('.camera-controls').appendChild(loadingMsg);
                     
-                    // Procesar con Tesseract.js para encontrar texto
-                    const result = await Tesseract.recognize(
-                        blob,
-                        'spa', // español
-                        { 
-                            logger: m => console.log(m),
-                            errorLimit: 100 // más tolerante con errores
+                    // Intentar procesar con Tesseract.js si está disponible
+                    if (typeof Tesseract !== 'undefined') {
+                        try {
+                            const result = await Tesseract.recognize(
+                                blob,
+                                'spa', // español
+                                { 
+                                    logger: m => console.log(m),
+                                    errorLimit: 100 // más tolerante con errores
+                                }
+                            );
+                            
+                            // Buscar patrones de códigos de error comunes (E01, E02, F01, etc.)
+                            const text = result.data.text;
+                            const errorCodes = text.match(/[EF][0-9]{2,3}/g) || [];
+                            
+                            // Si se encontraron códigos de error
+                            if (errorCodes.length > 0) {
+                                // Remover indicador de carga
+                                document.getElementById('ocr-loading').remove();
+                                
+                                // Mostrar códigos encontrados
+                                const foundMsg = document.createElement('div');
+                                foundMsg.className = 'text-sm text-white bg-green-800 bg-opacity-70 p-2 rounded';
+                                foundMsg.innerHTML = `<i class="fas fa-check mr-2"></i> Detectados códigos: ${errorCodes.join(', ')}`;
+                                document.querySelector('.camera-controls').appendChild(foundMsg);
+                                
+                                // Prepopular el input con una consulta sobre el código
+                                userInput.value = `¿Qué significa el código de error ${errorCodes[0]}?`;
+                                autoResizeTextarea(userInput);
+                                
+                                // Desaparecer el mensaje después de 3 segundos
+                                setTimeout(() => {
+                                    foundMsg.remove();
+                                    stopCamera(); // Cerrar cámara automáticamente
+                                }, 3000);
+                            } else {
+                                // Si no se encontraron códigos
+                                document.getElementById('ocr-loading').remove();
+                                
+                                const notFoundMsg = document.createElement('div');
+                                notFoundMsg.className = 'text-sm text-white bg-gray-800 bg-opacity-70 p-2 rounded';
+                                notFoundMsg.innerHTML = `<i class="fas fa-info-circle mr-2"></i> No se detectaron códigos de error`;
+                                document.querySelector('.camera-controls').appendChild(notFoundMsg);
+                                
+                                // Desaparecer el mensaje después de 3 segundos
+                                setTimeout(() => {
+                                    notFoundMsg.remove();
+                                }, 3000);
+                            }
+                        } catch (error) {
+                            console.error('Error al analizar imagen:', error);
+                            // Remover indicador de carga si existe
+                            const loadingEl = document.getElementById('ocr-loading');
+                            if (loadingEl) loadingEl.remove();
                         }
-                    );
-                    
-                    // Buscar patrones de códigos de error comunes (E01, E02, F01, etc.)
-                    const text = result.data.text;
-                    const errorCodes = text.match(/[EF][0-9]{2,3}/g) || [];
-                    
-                    // Si se encontraron códigos de error
-                    if (errorCodes.length > 0) {
-                        // Remover indicador de carga
-                        document.getElementById('ocr-loading').remove();
-                        
-                        // Mostrar códigos encontrados
-                        const foundMsg = document.createElement('div');
-                        foundMsg.className = 'text-sm text-white bg-green-800 bg-opacity-70 p-2 rounded';
-                        foundMsg.innerHTML = `<i class="fas fa-check mr-2"></i> Detectados códigos: ${errorCodes.join(', ')}`;
-                        document.querySelector('.camera-controls').appendChild(foundMsg);
-                        
-                        // Prepopular el input con una consulta sobre el código
-                        userInput.value = `¿Qué significa el código de error ${errorCodes[0]}?`;
-                        autoResizeTextarea(userInput);
-                        
-                        // Desaparecer el mensaje después de 3 segundos
-                        setTimeout(() => {
-                            foundMsg.remove();
-                            stopCamera(); // Cerrar cámara automáticamente
-                        }, 3000);
                     } else {
-                        // Si no se encontraron códigos
-                        document.getElementById('ocr-loading').remove();
-                        
-                        const notFoundMsg = document.createElement('div');
-                        notFoundMsg.className = 'text-sm text-white bg-gray-800 bg-opacity-70 p-2 rounded';
-                        notFoundMsg.innerHTML = `<i class="fas fa-info-circle mr-2"></i> No se detectaron códigos de error`;
-                        document.querySelector('.camera-controls').appendChild(notFoundMsg);
-                        
-                        // Desaparecer el mensaje después de 3 segundos
-                        setTimeout(() => {
-                            notFoundMsg.remove();
-                        }, 3000);
+                        // Si Tesseract no está disponible
+                        const loadingEl = document.getElementById('ocr-loading');
+                        if (loadingEl) loadingEl.remove();
+                        console.log('Tesseract.js no está disponible para análisis OCR');
                     }
                 } catch (error) {
-                    console.error('Error al analizar imagen:', error);
-                    // Remover indicador de carga si existe
+                    console.error('Error al procesar imagen:', error);
                     const loadingEl = document.getElementById('ocr-loading');
                     if (loadingEl) loadingEl.remove();
                 }
@@ -964,6 +1276,13 @@ document.addEventListener('DOMContentLoaded', function() {
         // Limpiar estado
         lastResponseHadImages = false;
         availableImagesInLastResponse = [];
+        
+        // Limpiar ID de sesión y modelo actual
+        sessionId = null;
+        currentModel = null;
+        localStorage.removeItem('svanIA_session_id');
+        localStorage.removeItem('svanIA_current_model');
+        console.log('[LIMPIEZA] ID de sesión y modelo actual eliminados');
     }
 
     function showConfirmModal() {
@@ -1189,8 +1508,41 @@ document.addEventListener('DOMContentLoaded', function() {
         // Iniciar el temporizador
         resetInactivityTimer();
     }
-
-    // ==================== ENVÍO DE MENSAJES ====================
+    
+    function showResponseImages(images) {
+        // Crear un mensaje con las imágenes
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'image-container grid grid-cols-1 md:grid-cols-2 gap-4 my-3';
+        
+        images.forEach(imageUrl => {
+            const imgWrapper = document.createElement('div');
+            imgWrapper.className = 'image-wrapper';
+            
+            const img = document.createElement('img');
+            img.src = ensureHttps(imageUrl);
+            img.alt = 'Imagen de respuesta';
+            img.className = 'max-w-full rounded-lg cursor-pointer hover:opacity-90 transition-opacity';
+            img.loading = 'lazy';
+            
+            img.addEventListener('click', function() {
+                openImageViewer(this.src, this.alt);
+            });
+            
+            imgWrapper.appendChild(img);
+            messageDiv.appendChild(imgWrapper);
+        });
+        
+        chatMessages.appendChild(messageDiv);
+        scrollToBottom();
+    }
+    
+    // Variables para mantener la sesión y el contexto
+    let sessionId = localStorage.getItem('svanIA_session_id') || null;
+    let currentModel = localStorage.getItem('svanIA_current_model') || null;
+    console.log(`[INICIO] ID de sesión al cargar: ${sessionId}`);
+    console.log(`[INICIO] Modelo actual al cargar: ${currentModel}`);
+    
+    // Función para manejar el envío de mensajes
     async function handleSubmit() {
         const message = userInput.value.trim();
         if (!message && attachments.length === 0) return;
@@ -1201,14 +1553,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
         try {
             if (message) {
-                console.log("Valor del input antes del envío:", message);
                 addMessage(message, 'user');
             } else if (attachments.length > 0) {
-                console.log("Enviando adjuntos sin mensaje de texto");
                 addMessage("Te envío una imagen para analizar", 'user');
             }
             
-            console.log("Limpiando input...");
             userInput.value = '';
             userInput.style.height = 'auto';
             showLoadingIndicator();
@@ -1216,22 +1565,28 @@ document.addEventListener('DOMContentLoaded', function() {
             const formData = new FormData();
             if (message) formData.append('message', message);
             attachments.forEach(file => formData.append('attachments', file));
+            
+            // Enviar el ID de sesión si existe
+            if (sessionId) {
+                formData.append('session_id', sessionId);
+                console.log(`[ENVIO] Usando ID de sesión existente: ${sessionId}`);
+            } else {
+                console.log(`[ADVERTENCIA] No hay ID de sesión disponible para enviar`);
+            }
 
-            const response = await fetch(`${API_BASE_URL}/fullchat`, {
+            // Asegurar que la URL sea HTTPS en producción
+            const apiUrl = ensureHttps(`${API_BASE_URL}/chat`);
+            
+            const response = await fetch(apiUrl, {
                 method: 'POST',
-                body: formData,
-                // Tiempo de espera ampliado para consultas complejas
-                timeout: 60000 // 60 segundos
+                body: formData
             });
 
-            console.log("Respuesta del backend:", response.status);
-            // Verificar si la solicitud fue realizada con éxito
             if (!response.ok) {
                 throw new Error(`Error en la solicitud: ${response.status} ${response.statusText}`);
             }
 
             const data = await response.json();
-            console.log("Datos recibidos:", data);
             hideLoadingIndicator();
 
             if (data.error) {
@@ -1240,13 +1595,28 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Procesar y mostrar la respuesta
                 addMessage(data.response, 'bot');
                 
-                // Guardar información sobre imágenes si las hay
-                lastResponseHadImages = data.has_images || data.images_available || false;
-                availableImagesInLastResponse = data.images || [];
+                // Guardar el ID de sesión si se recibe uno nuevo
+                if (data.session_id) {
+                    sessionId = data.session_id;
+                    localStorage.setItem('svanIA_session_id', sessionId);
+                    console.log(`[RECIBIDO] ID de sesión guardado: ${sessionId}`);
+                    
+                    // Verificar que se guardó correctamente
+                    const storedId = localStorage.getItem('svanIA_session_id');
+                    console.log(`[VERIFICACION] ID almacenado en localStorage: ${storedId}`);
+                } else {
+                    console.log(`[ERROR] No se recibió ID de sesión del servidor`);
+                }
+                
+                // Guardar el modelo actual si se recibe
+                if (data.current_model) {
+                    currentModel = data.current_model;
+                    localStorage.setItem('svanIA_current_model', currentModel);
+                    console.log(`[RECIBIDO] Modelo actual guardado: ${currentModel}`);
+                }
                 
                 // Si hay imágenes disponibles pero no se mostraron, sugerir verlas
                 if (data.images_available && !data.has_images) {
-                    // La respuesta ya incluye información sobre imágenes disponibles
                     console.log("Hay imágenes disponibles para mostrar");
                 }
                 
@@ -1255,7 +1625,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     showResponseImages(data.images);
                 }
             }
-
+            
             // Limpiar adjuntos
             attachments = [];
             attachmentsPreview.innerHTML = '';
@@ -1348,8 +1718,24 @@ document.addEventListener('DOMContentLoaded', function() {
     // Cargar scripts dinámicos si son necesarios
     loadDynamicScripts();
     
-    // Iniciar la aplicación
+    // Inicializar la aplicación
     init();
+    
+    // Asegurar que todos los recursos se carguen correctamente
+    window.addEventListener('load', function() {
+        // Ejecutar nuevamente la función para asegurar todos los recursos
+        secureAllResources();
+        console.log('Todos los recursos han sido asegurados para usar HTTPS');
+        
+        // Verificar si hay imágenes o recursos que no se cargaron correctamente
+        document.querySelectorAll('img').forEach(img => {
+            if (img.complete && img.naturalHeight === 0) {
+                console.warn('Imagen no cargada correctamente:', img.src);
+                // Intentar cargar nuevamente con HTTPS forzado
+                img.src = ensureHttps(img.src);
+            }
+        });
+    });
     
     // Configurar detección de inactividad
     setupInactivityDetection();

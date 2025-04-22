@@ -44,6 +44,8 @@ from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 import uvicorn
 from typing import List
 import re
@@ -51,7 +53,6 @@ import json
 from datetime import datetime
 import asyncio
 from contextlib import asynccontextmanager
-
 
 # Importar servicios y modelos
 from app.services.redis_service import RedisService
@@ -67,11 +68,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Configurar logging
+# Configurar logging (simplificado para Azure)
+# Determinar el nivel de logging desde variables de entorno
+log_level_name = os.getenv("LOG_LEVEL", "INFO" if os.getenv("PRODUCTION") else "DEBUG")
+log_level = getattr(logging, log_level_name.upper())
+
+# Configurar formato de logs
+log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+
+# Configurar logging solo con handler para consola (Azure captura stdout/stderr)
 logging.basicConfig(
-    level=logging.INFO if os.getenv("PRODUCTION") else logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=log_level,
+    format=log_format,
     handlers=[
+        # Handler para stdout
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -183,6 +193,34 @@ app = FastAPI(
     lifespan=lifespan  # Usar el gestor de contexto para lifecycle events
 )
 
+# Middleware para manejar X-Forwarded-Proto y forzar HTTPS en las URLs generadas
+class HTTPSRedirectMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Detectar si estamos en producción (Azure)
+        is_production = not (request.url.hostname == 'localhost' or request.url.hostname == '127.0.0.1')
+        
+        # Comprobar si ya estamos en HTTPS o si hay un proxy que indica HTTPS
+        is_https = request.url.scheme == 'https' or request.headers.get("X-Forwarded-Proto") == "https"
+        
+        # Solo redirigir si estamos en producción, la solicitud es HTTP, y no hay indicación de HTTPS en los encabezados
+        if is_production and not is_https and request.url.scheme == 'http':
+            # Evitar bucles de redirección comprobando encabezados adicionales
+            redirect_count = int(request.headers.get("X-Redirect-Count", "0"))
+            if redirect_count < 3:  # Limitar a un máximo de 3 redirecciones
+                https_url = str(request.url).replace('http://', 'https://', 1)
+                headers = {'Location': https_url, 'X-Redirect-Count': str(redirect_count + 1)}
+                return Response(status_code=301, headers=headers)
+        
+        # Establecer el esquema a HTTPS en producción para las URLs generadas
+        if is_production:
+            request.scope["scheme"] = "https"
+            
+        response = await call_next(request)
+        return response
+
+# Añadir el middleware para manejar HTTPS
+app.add_middleware(HTTPSRedirectMiddleware)
+
 # Configurar middleware de seguridad
 app.add_middleware(
     TrustedHostMiddleware,
@@ -191,16 +229,14 @@ app.add_middleware(
         "127.0.0.1",
         "svania.azurewebsites.net",
         "b2b.gruposvan.com",
-        "*"
+        "*"  # Temporalmente para desarrollo
     ] if not os.getenv("PRODUCTION", False) else [
-        "svanartificialintelligence.azurewebsites.net",
         "svania.azurewebsites.net",
-        "b2b.gruposvan.com",
-        "*"  # Temporalmente permite todos para diagnosticar
+        "b2b.gruposvan.com"
     ]
 )
 
-# Configurar CORS
+# Configurar CORS (alineado con cors.json)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -213,8 +249,9 @@ app.add_middleware(
         "https://svania.azurewebsites.net"
     ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-CSRF-Token"],
+    max_age=86400
 )
 
 # Agregar compresión Gzip
@@ -295,6 +332,63 @@ def health_check():
             "timestamp": datetime.now().isoformat()
         }
 
+@app.get('/debug/logs')
+def view_logs():
+    """Endpoint para ver los últimos logs de la aplicación"""
+    try:
+        # Verificar si estamos en producción y si el usuario tiene acceso
+        # En un entorno real, deberías implementar autenticación aquí
+        
+        # Obtener los últimos logs
+        log_dir = Path("logs")
+        log_files = []
+        
+        if log_dir.exists():
+            log_files = list(log_dir.glob("*.log"))
+        
+        # Si no hay archivos de log en el directorio logs, buscar en stdout/stderr
+        if not log_files:
+            # En Azure App Service, los logs están en /home/LogFiles
+            azure_logs = Path("/home/LogFiles")
+            if azure_logs.exists():
+                log_files.extend(list(azure_logs.glob("*.log")))
+                log_files.extend(list(azure_logs.glob("*/*.log")))
+        
+        logs_data = {}
+        
+        for log_file in log_files:
+            try:
+                # Leer las últimas 100 líneas de cada archivo de log
+                with open(log_file, 'r') as f:
+                    lines = f.readlines()
+                    logs_data[str(log_file)] = lines[-100:] if len(lines) > 100 else lines
+            except Exception as e:
+                logs_data[str(log_file)] = [f"Error al leer el archivo: {str(e)}"]
+        
+        # Añadir información sobre Redis
+        if hasattr(app.state, 'redis_service'):
+            redis_info = {
+                "connected": app.state.redis_service.connected,
+                "host": app.state.redis_service.settings.REDIS_HOST,
+                "port": app.state.redis_service.settings.REDIS_PORT
+            }
+            logs_data["redis_info"] = redis_info
+        
+        # Añadir información sobre el entorno
+        logs_data["environment"] = {
+            "production": os.getenv("PRODUCTION", "False"),
+            "python_version": sys.version,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        return logs_data
+    except Exception as e:
+        logger.error(f"Error al obtener logs: {str(e)}")
+        return {
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
 # Manejadores de errores personalizados
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
@@ -365,7 +459,7 @@ if __name__ == "__main__":
     
     logger.info(f"Iniciando servidor con {workers} workers en modo {'producción' if os.getenv('PRODUCTION') else 'desarrollo'}")
     
-    # Nota: En Azure App Service, se debe usar Gunicorn como comando de inicio
+    # Nota: En Azure App Service, se debe usar Gunicorn como comando de inicio (definido en startup.sh)
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",

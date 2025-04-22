@@ -34,6 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libmagic1 \
     procps \
     net-tools \
+    dos2unix \
     && rm -rf /var/lib/apt/lists/*
 
 # Instalar Tesseract OCR y dependencias para procesamiento de imágenes
@@ -64,7 +65,17 @@ COPY --from=builder /app/static/css/styles.min.css /app/static/css/
 
 # Copiar el script de inicio
 COPY startup.sh /app/startup.sh
-RUN chmod +x /app/startup.sh
+RUN dos2unix /app/startup.sh && chmod +x /app/startup.sh
+
+# Copiar archivos de configuración de Azure App Service
+COPY .deployment /app/.deployment
+COPY web.config /app/web.config
+COPY cors.json /app/cors.json
+COPY applicationHost.xdt /app/applicationHost.xdt
+
+# Convertir archivos a formato Unix y establecer permisos
+RUN dos2unix /app/.deployment /app/web.config /app/cors.json /app/applicationHost.xdt && \
+    chmod 644 /app/.deployment /app/web.config /app/cors.json /app/applicationHost.xdt
 
 # Crear directorios necesarios con permisos amplios
 RUN mkdir -p /app/uploads /app/Manuales /app/temp /app/logs && \

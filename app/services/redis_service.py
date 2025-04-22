@@ -1,133 +1,117 @@
-"""
-Servicio unificado para gestionar conexiones a Redis.
-Implementa patrón singleton y manejo de errores.
-"""
-import os
-import redis
 import logging
-import json
-from typing import Optional, Any, Dict
+import redis.asyncio as redis
+import time
+import traceback
+from app.core.settings import Settings
 
 logger = logging.getLogger(__name__)
 
 class RedisService:
-    _instance = None
-    
-    def __new__(cls, *args, **kwargs):
-        if cls._instance is None:
-            cls._instance = super(RedisService, cls).__new__(cls)
-            cls._instance.initialized = False
-        return cls._instance
-    
     def __init__(self):
-        if self.initialized:
-            return
-            
-        # Configuración desde variables de entorno
-        self.host = os.getenv("REDIS_HOST", "localhost")
-        self.port = int(os.getenv("REDIS_PORT", "6379"))
-        self.password = os.getenv("REDIS_PASSWORD", "")
-        self.ssl = os.getenv("REDIS_SSL", "False").lower() == "true"
-        self.connected = False
+        self.settings = Settings()
         self.client = None
-        self.ttl = int(os.getenv("REDIS_TTL", "3600"))  # Default 1 hora
-        
-        # Intentar conexión inicial
-        self._connect()
-        self.initialized = True
-    
-    def _connect(self):
-        """Inicializa conexión a Redis con manejo de errores."""
+        self.connected = False
+        self._initialize()
+
+    def _initialize(self):
         try:
+            logger.info(f"Inicializando Redis con host={self.settings.REDIS_HOST}, port={self.settings.REDIS_PORT}")
+            
+            if not self.settings.REDIS_HOST:
+                logger.error("REDIS_HOST no está configurado")
+                self.client = None
+                return
+                
+            if not self.settings.REDIS_PASSWORD:
+                logger.warning("REDIS_PASSWORD no está configurado, intentando conectar sin contraseña")
+            
             self.client = redis.Redis(
-                host=self.host,
-                port=self.port,
-                password=self.password,
-                ssl=self.ssl,
+                host=self.settings.REDIS_HOST,
+                port=self.settings.REDIS_PORT,
+                password=self.settings.REDIS_PASSWORD,
                 decode_responses=True,
                 socket_timeout=5,
                 socket_connect_timeout=5,
-                health_check_interval=30
+                socket_keepalive=True,
+                health_check_interval=15
             )
-            # Verificar conexión
-            self.client.ping()
+            logger.info("Redis client initialized successfully")
+        except Exception as e:
+            logger.error(f"Error al inicializar Redis: {str(e)}")
+            logger.error(f"Detalles del error: {traceback.format_exc()}")
+            self.client = None
+
+    async def ensure_connection(self):
+        if self.client is None:
+            logger.warning("Redis no está disponible - Operando sin caché")
+            self.connected = False
+            return False
+        try:
+            start_time = time.time()
+            await self.client.ping()
+            elapsed = time.time() - start_time
+            
             self.connected = True
-            logger.info(f"Conexión a Redis establecida correctamente: {self.host}:{self.port}")
+            logger.info(f"Conexión con Redis verificada en {elapsed:.2f}s")
+            
+            try:
+                test_key = "redis:test:connection"
+                await self.client.set(test_key, "test_value", ex=60)
+                test_value = await self.client.get(test_key)
+                if test_value == "test_value":
+                    logger.info("Operaciones básicas de Redis funcionan correctamente")
+                else:
+                    logger.warning(f"Valor recuperado de Redis no coincide: {test_value}")
+            except Exception as e:
+                logger.warning(f"Error en operaciones básicas de Redis: {str(e)}")
+                
+            return True
         except Exception as e:
-            self.connected = False
             logger.error(f"Error al conectar con Redis: {str(e)}")
-    
-    def ensure_connection(self):
-        """Verifica y restablece la conexión si es necesario."""
-        if not self.connected or not self.client:
-            self._connect()
-        return self.connected
-    
-    def get(self, key: str) -> Optional[str]:
-        """Obtiene un valor de Redis con manejo de errores."""
-        if not self.ensure_connection():
-            return None
-            
-        try:
-            return self.client.get(key)
-        except Exception as e:
-            logger.error(f"Error al obtener valor de Redis: {str(e)}")
-            self.connected = False
-            return None
-    
-    def set(self, key: str, value: str, ex: int = None) -> bool:
-        """Establece un valor en Redis con TTL opcional."""
-        if not self.ensure_connection():
-            return False
-            
-        try:
-            return self.client.set(key, value, ex=ex or self.ttl)
-        except Exception as e:
-            logger.error(f"Error al establecer valor en Redis: {str(e)}")
+            logger.error(f"Detalles del error de conexión: {traceback.format_exc()}")
             self.connected = False
             return False
-    
-    def delete(self, key: str) -> bool:
-        """Elimina una clave de Redis."""
-        if not self.ensure_connection():
+
+    async def set(self, key: str, value: str, ex: int = None):
+        if not self.connected:
+            logger.debug(f"No se puede establecer clave {key} - Redis no disponible")
             return False
-            
         try:
-            return self.client.delete(key) > 0
+            logger.debug(f"Estableciendo clave en Redis: {key} (TTL: {ex}s)")
+            
+            start_time = time.time()
+            result = await self.client.set(key, value, ex=ex)
+            elapsed = time.time() - start_time
+            
+            if result:
+                logger.debug(f"Clave {key} establecida correctamente en {elapsed:.2f}s")
+            else:
+                logger.warning(f"No se pudo establecer la clave {key} en Redis (result={result})")
+                
+            return result
         except Exception as e:
-            logger.error(f"Error al eliminar clave de Redis: {str(e)}")
-            self.connected = False
+            logger.error(f"Error al establecer clave {key} en Redis: {str(e)}")
+            logger.error(f"Detalles del error: {traceback.format_exc()}")
             return False
-    
-    def get_json(self, key: str) -> Optional[Dict]:
-        """Obtiene y deserializa un valor JSON de Redis."""
-        data = self.get(key)
-        if not data:
+
+    async def get(self, key: str):
+        if not self.connected:
+            logger.debug(f"No se puede obtener clave {key} - Redis no disponible")
             return None
-            
         try:
-            return json.loads(data)
-        except json.JSONDecodeError as e:
-            logger.error(f"Error deserializando JSON de Redis: {str(e)}")
+            logger.debug(f"Obteniendo clave de Redis: {key}")
+            
+            start_time = time.time()
+            value = await self.client.get(key)
+            elapsed = time.time() - start_time
+            
+            if value is not None:
+                logger.debug(f"Clave {key} obtenida correctamente en {elapsed:.2f}s")
+            else:
+                logger.debug(f"Clave {key} no encontrada en Redis")
+                
+            return value
+        except Exception as e:
+            logger.error(f"Error al obtener clave {key} de Redis: {str(e)}")
+            logger.error(f"Detalles del error: {traceback.format_exc()}")
             return None
-    
-    def set_json(self, key: str, value: Dict, ex: int = None) -> bool:
-        """Serializa y guarda un valor JSON en Redis."""
-        try:
-            json_data = json.dumps(value)
-            return self.set(key, json_data, ex=ex)
-        except Exception as e:
-            logger.error(f"Error serializando JSON para Redis: {str(e)}")
-            return False
-    
-    def keys(self, pattern: str) -> list:
-        """Obtiene claves que coinciden con un patrón."""
-        if not self.ensure_connection():
-            return []
-            
-        try:
-            return self.client.keys(pattern)
-        except Exception as e:
-            logger.error(f"Error buscando claves en Redis: {str(e)}")
-            self.connected = False
-            return []

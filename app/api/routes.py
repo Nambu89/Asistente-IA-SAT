@@ -20,8 +20,10 @@ async def home(request: Request):
 
 @router.post("/chat")
 async def chat_endpoint(
+    request: Request,
     message: Optional[str] = Form(None),
-    attachments: List[UploadFile] = File(None)
+    attachments: List[UploadFile] = File(None),
+    session_id: Optional[str] = Form(None)
 ):
     try:
         # Procesar archivos adjuntos si existen
@@ -50,15 +52,31 @@ async def chat_endpoint(
                 # Procesar el archivo con el servicio de chat
                 await chat_service.process_attachment(file_path)
 
+        # Generar un ID de sesión si no existe
+        if not session_id:
+            import uuid
+            session_id = str(uuid.uuid4())
+        
         # Procesar mensaje si existe
         if message:
             try:
-                response = await chat_service.get_chat_response(message)
-                return JSONResponse(content={"response": response})
+                response = await chat_service.get_chat_response(message, session_id=session_id)
+                
+                # Preparar respuesta con información adicional
+                response_data = {
+                    "response": response,
+                    "session_id": session_id  # Devolver el ID de sesión para que el cliente lo guarde
+                }
+                
+                # Añadir el modelo actual si existe
+                if chat_service.current_model:
+                    response_data["current_model"] = chat_service.current_model
+                    
+                return JSONResponse(content=response_data)
             except HTTPException as e:
                 return JSONResponse(
                     status_code=e.status_code,
-                    content={"error": str(e.detail)}
+                    content={"error": str(e.detail), "session_id": session_id}
                 )
         
         return JSONResponse(content={"response": "Archivos procesados correctamente"})
