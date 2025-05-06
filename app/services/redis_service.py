@@ -3,6 +3,7 @@ import redis.asyncio as redis
 import time
 import traceback
 import asyncio
+import json
 from app.core.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -144,3 +145,76 @@ class RedisService:
             logger.error(f"Error al obtener clave {key} de Redis: {str(e)}")
             logger.error(f"Detalles del error: {traceback.format_exc()}")
             return None
+            
+    async def get_json(self, key: str):
+        """Obtiene un valor JSON de Redis y lo deserializa.
+        
+        Args:
+            key: Clave a obtener
+            
+        Returns:
+            Objeto Python deserializado o None si no existe
+        """
+        if not self.connected:
+            logger.debug(f"No se puede obtener JSON {key} - Redis no disponible")
+            return None
+            
+        try:
+            logger.debug(f"Obteniendo JSON de Redis: {key}")
+            
+            start_time = time.time()
+            value = await self.client.get(key)
+            elapsed = time.time() - start_time
+            
+            if value is not None:
+                try:
+                    result = json.loads(value)
+                    logger.debug(f"JSON {key} obtenido y deserializado en {elapsed:.2f}s")
+                    return result
+                except json.JSONDecodeError as je:
+                    logger.error(f"Error deserializando JSON para clave {key}: {str(je)}")
+                    return None
+            else:
+                logger.debug(f"Clave JSON {key} no encontrada en Redis")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error al obtener JSON {key} de Redis: {str(e)}")
+            logger.error(f"Detalles del error: {traceback.format_exc()}")
+            return None
+            
+    async def set_json(self, key: str, value, ex: int = None):
+        """Serializa un objeto Python a JSON y lo guarda en Redis.
+        
+        Args:
+            key: Clave para almacenar el valor
+            value: Objeto Python serializable a JSON
+            ex: Tiempo de expiración en segundos (opcional)
+            
+        Returns:
+            True si se guardó correctamente, False en caso contrario
+        """
+        if not self.connected:
+            logger.debug(f"No se puede establecer JSON {key} - Redis no disponible")
+            return False
+            
+        try:
+            logger.debug(f"Serializando y guardando JSON en Redis: {key} (TTL: {ex}s)")
+            
+            # Serializar el objeto a JSON
+            json_value = json.dumps(value)
+            
+            start_time = time.time()
+            result = await self.client.set(key, json_value, ex=ex)
+            elapsed = time.time() - start_time
+            
+            if result:
+                logger.debug(f"JSON {key} establecido correctamente en {elapsed:.2f}s")
+            else:
+                logger.warning(f"No se pudo establecer JSON {key} en Redis (result={result})")
+                
+            return result
+        except Exception as e:
+            logger.error(f"Error al establecer JSON {key} en Redis: {str(e)}")
+            logger.error(f"Detalles del error: {traceback.format_exc()}")
+            return False

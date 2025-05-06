@@ -215,79 +215,65 @@ class AzureSearchService:
                 select=["metadata_storage_name", "metadata_storage_path", "content", "modelo"],
                 top=1
             ))
-            
-            # Si no hay resultados, intentar con comodín
-            if not results:
-                logger.info(f"No se encontró coincidencia exacta, probando con comodín")
-                filter_expr = f"search.ismatch('{model_normalized}*', 'modelo')"
-                results = list(self.client.search(
+            if results:
+                logger.info(f"Manual encontrado con búsqueda exacta para {model_normalized}")
+                manual_data = results[0]
+                self._cache_result(cache_key, manual_data)
+                logger.info(f"Manual para {model_normalized} recuperado en {time.time() - start_time:.2f}s")
+                return manual_data
+            else:
+                logger.info(f"No se encontró coincidencia exacta para {model_normalized}, probando con comodín")
+                # Estrategia 2: Búsqueda con comodín
+                filter_expr_wildcard = f"modelo eq '{model_normalized}*'"
+                results_wildcard = list(self.client.search(
                     search_text="*",
-                    filter=filter_expr,
+                    filter=filter_expr_wildcard,
                     select=["metadata_storage_name", "metadata_storage_path", "content", "modelo"],
                     top=1
                 ))
-            
-            # Si aún no hay resultados, última estrategia
-            if not results:
-                logger.info(f"Último intento: búsqueda de texto completo")
-                results = list(self.client.search(
-                    search_text=model_normalized,
-                    search_fields=["modelo"],
-                    select=["metadata_storage_name", "metadata_storage_path", "content", "modelo"],
-                    top=1
-                ))
-            
-            if not results:
-                logger.warning(f"No se encontró manual para el modelo: {model}")
-                return None
-            
-            # Procesar resultado
-            result = results[0]
-            name = result.get("metadata_storage_name", None)
-            modelo = result.get("modelo", "No model")
-            content = result.get("content", "")
-            
-            if not content:
-                logger.warning(f"No hay contenido disponible para el modelo: {model}")
-                return None
-            
-            # Limpiar el contenido de espacios en blanco excesivos
-            content = re.sub(r'\n\s*\n', '\n\n', content)
-            content = re.sub(r' +', ' ', content)
-            content = re.sub(r'^\s+|\s+$', '', content, flags=re.MULTILINE)
-            
-            # Truncar contenido si es extremadamente largo
-            if len(content) > 100000:
-                logger.warning(f"Contenido muy largo ({len(content)} caracteres), truncando")
-                content = content[:100000] + "\n\n[Contenido truncado por ser demasiado largo...]"
-            
-            manual_data = {
-                "name": name,
-                "modelo": modelo,
-                "content": content,
-                "path": result.get("metadata_storage_path", "No path")
-            }
-            
-            # Guardar en Redis si está disponible
-            if self.redis.connected:
-                self.redis.set_json(cache_key, manual_data, ex=self.cache_ttl)
-            
-            # Guardar en memoria como respaldo
-            self.memory_cache[cache_key] = {
-                'data': manual_data,
-                'timestamp': time.time()
-            }
-            self._manage_memory_cache()
-            
-            # Log de rendimiento
-            elapsed = time.time() - start_time
-            logger.info(f"Manual para {model} recuperado en {elapsed:.2f}s")
-            
-            return manual_data
-
+                if results_wildcard:
+                    logger.info(f"Manual encontrado con búsqueda con comodín para {model_normalized}")
+                    manual_data = results_wildcard[0]
+                    self._cache_result(cache_key, manual_data)
+                    logger.info(f"Manual para {model_normalized} recuperado en {time.time() - start_time:.2f}s")
+                    return manual_data
+                else:
+                    logger.info(f"No se encontró coincidencia con comodín para {model_normalized}, último intento: búsqueda de texto completo")
+                    # Estrategia 3: Último intento - búsqueda de texto completo
+                    results_fulltext = list(self.client.search(
+                        search_text=model_normalized,
+                        select=["metadata_storage_name", "metadata_storage_path", "content", "modelo"],
+                        top=1
+                    ))
+                    if results_fulltext:
+                        logger.info(f"Manual encontrado con búsqueda de texto completo para {model_normalized}")
+                        manual_data = results_fulltext[0]
+                        self._cache_result(cache_key, manual_data)
+                        logger.info(f"Manual para {model_normalized} recuperado en {time.time() - start_time:.2f}s")
+                        return manual_data
+                    else:
+                        logger.warning(f"No se encontró manual para el modelo: {model_normalized} después de todas las estrategias")
+                        return None
         except Exception as e:
-            logger.error(f"Error buscando manual: {str(e)}", exc_info=True)
+            logger.error(f"Error al buscar manual para {model_normalized}: {str(e)}")
             return None
+
+    def _cache_result(self, cache_key, result):
+        manual_data = {
+            "name": result.get("metadata_storage_name", None),
+            "modelo": result.get("modelo", "No model"),
+            "content": result.get("content", ""),
+            "path": result.get("metadata_storage_path", "No path")
+        }
+        # Guardar en Redis si está disponible
+        if self.redis.connected:
+            self.redis.set_json(cache_key, manual_data, ex=self.cache_ttl)
+        # Guardar en memoria como respaldo
+        self.memory_cache[cache_key] = {
+            'data': manual_data,
+            'timestamp': time.time()
+        }
+        self._manage_memory_cache()
 
     def _manage_memory_cache(self):
         """Gestiona el tamaño de la caché en memoria, eliminando entradas antiguas si es necesario"""
