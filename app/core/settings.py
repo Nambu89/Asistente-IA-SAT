@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     MAX_TOKENS: int = int(os.getenv("MAX_TOKENS", "4000"))
     TEMPERATURE: float = float(os.getenv("TEMPERATURE", "0.7"))
 
+    # Configuración de LangChain
+    AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT_NAME: str = os.getenv("AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT_NAME", "text-embedding-ada-002")
+    USE_LANGCHAIN: bool = os.getenv("USE_LANGCHAIN", "true").lower() == "true"
+    LANGCHAIN_VECTORSTORE_DIR: str = os.getenv("LANGCHAIN_VECTORSTORE_DIR", "data/vectorstores")
+    LANGCHAIN_CHUNK_SIZE: int = int(os.getenv("LANGCHAIN_CHUNK_SIZE", "1000"))
+    LANGCHAIN_CHUNK_OVERLAP: int = int(os.getenv("LANGCHAIN_CHUNK_OVERLAP", "200"))
+
     # Directorios del proyecto
     BASE_DIR: Path = Path(__file__).resolve().parent.parent.parent
     PDF_DIR: Path = BASE_DIR / 'Manuales'
@@ -89,6 +96,12 @@ class Settings(BaseSettings):
         self.PDF_DIR.mkdir(parents=True, exist_ok=True)
         self.UPLOAD_DIR.mkdir(exist_ok=True)
         self.LOGS_DIR.mkdir(exist_ok=True)
+        
+        # Crear directorio para vectorstores de LangChain si está habilitado
+        if self.USE_LANGCHAIN:
+            vectorstore_dir = Path(self.LANGCHAIN_VECTORSTORE_DIR)
+            vectorstore_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Directorio para vectorstores creado: {vectorstore_dir}")
         
         # Registrar inicialización sin exponer variables sensibles
         logger.info("Settings initialized successfully")

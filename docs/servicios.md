@@ -8,7 +8,8 @@ Este documento describe los principales servicios que componen la aplicación Sv
 2. [Azure Search Service](#azure-search-service)
 3. [Azure OpenAI Service](#azure-openai-service)
 4. [Azure AI Foundry Service](#azure-ai-foundry-service)
-5. [Chat Services](#chat-services)
+5. [LangChain Service](#langchain-service)
+6. [Chat Services](#chat-services)
 
 ## Redis Service
 
@@ -111,9 +112,38 @@ Este servicio proporciona capacidades de análisis de imágenes y OCR utilizando
 
 El servicio se configura mediante variables de entorno específicas para Azure AI Foundry.
 
+## LangChain Service
+
+Este servicio implementa funcionalidades avanzadas de procesamiento de lenguaje natural y gestión de contexto utilizando la biblioteca LangChain.
+
+### Características
+
+- **Búsqueda Vectorial**: Utiliza embeddings para encontrar información semánticamente relevante
+- **Manejo Mejorado de Contexto**: Mantiene mejor el hilo de las conversaciones
+- **Retrieval-Augmented Generation (RAG)**: Combina recuperación de información con generación de texto
+- **Memoria de Conversación**: Implementa sistemas avanzados de memoria para mantener el contexto
+- **Integración con Servicios Existentes**: Funciona en conjunto con los servicios de Azure
+
+### Métodos Principales
+
+- `get_chat_response()`: Procesa un mensaje y genera una respuesta utilizando LangChain
+- `get_or_create_vectorstore()`: Gestiona vectorstores para búsqueda semántica
+- `create_memory_from_history()`: Crea objetos de memoria a partir del historial de conversación
+- `_extract_model_from_message()`: Extrae referencias a modelos específicos en los mensajes
+
+### Configuración
+
+El servicio se configura mediante las siguientes variables de entorno:
+
+- `USE_LANGCHAIN`: Activa o desactiva el uso de LangChain
+- `AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT_NAME`: Modelo de embeddings a utilizar
+- `LANGCHAIN_VECTORSTORE_DIR`: Directorio para almacenar vectorstores
+- `LANGCHAIN_CHUNK_SIZE`: Tamaño de los chunks para dividir documentos
+- `LANGCHAIN_CHUNK_OVERLAP`: Superposición entre chunks consecutivos
+
 ## Chat Services
 
-Este servicio implementa la lógica principal de conversación, integrando todos los servicios anteriores.
+Este servicio implementa la lógica principal de conversación, integrando todos los servicios anteriores. Ahora incluye soporte para LangChain.
 
 ### Características
 
@@ -121,6 +151,8 @@ Este servicio implementa la lógica principal de conversación, integrando todos
 - **Procesamiento de Mensajes**: Analiza y procesa mensajes de usuario
 - **Integración de Servicios**: Coordina los diferentes servicios para generar respuestas
 - **Manejo de Sesiones**: Gestiona sesiones de usuario y persistencia
+- **Integración con LangChain**: Utiliza LangChain cuando está habilitado para mejorar las respuestas
+- **Sistema de Respaldo**: Vuelve al flujo tradicional si LangChain falla
 
 ### Componentes Principales
 

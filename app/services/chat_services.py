@@ -4,11 +4,23 @@ from pathlib import Path
 import re
 import json
 import time
+import os
 from fastapi import HTTPException
 from app.core.settings import Settings
 from app.services.azure_search_service import AzureSearchService
 from app.services.azure_ai_foundry_service import AzureAIFoundryService 
 from app.services.redis_service import RedisService
+
+# Importar LangChain service si está disponible
+try:
+    from app.services.langchain_service import LangChainService
+    LANGCHAIN_AVAILABLE = True
+    logger = logging.getLogger(__name__)
+    logger.info("LangChain está disponible y será utilizado si está habilitado")
+except ImportError:
+    LANGCHAIN_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("LangChain no está disponible, se usará el flujo tradicional")
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -23,12 +35,43 @@ class ChatService:
         self.current_model = None
         self.conversation_history = []
         self.max_context_length = 8000  # Número máximo de caracteres a enviar a OpenAI
+        
+        # Configuración de LangChain
+        self.use_langchain = os.getenv("USE_LANGCHAIN", "false").lower() == "true"
+        self.langchain_service = None
+        
+        # Inicializar LangChain si está disponible y habilitado
+        if LANGCHAIN_AVAILABLE and self.use_langchain:
+            try:
+                self.langchain_service = LangChainService()
+                logger.info("LangChain inicializado correctamente")
+            except Exception as e:
+                logger.error(f"Error al inicializar LangChain: {str(e)}")
+                self.use_langchain = False
 
     async def get_chat_response(self, message: str, session_id: str = None) -> str:
         """
         Procesa un mensaje del usuario y retorna una respuesta
         """
         start_time = time.time()
+        
+        # Si LangChain está disponible y habilitado, usarlo
+        if self.use_langchain and self.langchain_service:
+            try:
+                logger.info("Usando LangChain para procesar el mensaje")
+                response = await self.langchain_service.get_chat_response(message, session_id)
+                
+                # Actualizar el modelo actual desde LangChain para mantener consistencia
+                self.current_model = self.langchain_service.current_model
+                
+                elapsed = time.time() - start_time
+                logger.info(f"Respuesta generada con LangChain en {elapsed:.2f}s")
+                return response
+            except Exception as e:
+                logger.error(f"Error al usar LangChain: {str(e)}, volviendo al flujo tradicional")
+                # Si falla LangChain, continuar con el flujo tradicional
+        
+        # Flujo tradicional (original)
         try:
             # Intentar recuperar modelo de sesiones anteriores si existe un session_id
             if session_id:

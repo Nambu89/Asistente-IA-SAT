@@ -31,6 +31,9 @@ except ImportError:
     cachetools = CacheToolsModule()
     print("WARNING: Using simplified cachetools implementation")
 
+# Configuración de LangChain
+os.environ["USE_LANGCHAIN"] = "true"  # Activar LangChain por defecto
+
 # Configurar el PYTHONPATH para que encuentre los módulos
 root_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(root_dir))
@@ -267,6 +270,14 @@ templates = Jinja2Templates(directory=str(root_dir / "templates"))
 app.include_router(api_router)
 app.include_router(manuals.router)
 app.include_router(standalone_router)
+
+# Incluir rutas de LangChain si están disponibles
+try:
+    from app.api.endpoints import langchain
+    app.include_router(langchain.router)
+    logger.info("Rutas de LangChain incluidas correctamente")
+except ImportError:
+    logger.warning("No se pudieron incluir las rutas de LangChain")
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):

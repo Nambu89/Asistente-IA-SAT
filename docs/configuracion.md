@@ -7,9 +7,10 @@ Este documento describe las opciones de configuración disponibles para la aplic
 1. [Variables de Entorno](#variables-de-entorno)
 2. [Archivo .env](#archivo-env)
 3. [Configuración de Servicios](#configuración-de-servicios)
-4. [Configuración de Seguridad](#configuración-de-seguridad)
-5. [Configuración de Logging](#configuración-de-logging)
-6. [Configuración de Rendimiento](#configuración-de-rendimiento)
+4. [Configuración de LangChain](#configuración-de-langchain)
+5. [Configuración de Seguridad](#configuración-de-seguridad)
+6. [Configuración de Logging](#configuración-de-logging)
+7. [Configuración de Rendimiento](#configuración-de-rendimiento)
 
 ## Variables de Entorno
 
@@ -37,6 +38,16 @@ SvanIA utiliza variables de entorno para configurar su comportamiento. A continu
 | `OPENAI_MODEL` | Modelo de OpenAI a utilizar | `gpt-4o-mini` |
 | `MAX_TOKENS` | Número máximo de tokens para la respuesta | `4000` |
 | `TEMPERATURE` | Temperatura para la generación de texto | `0.7` |
+
+### LangChain
+
+| Variable | Descripción | Valor Predeterminado |
+|----------|-------------|----------------------|
+| `USE_LANGCHAIN` | Activa o desactiva el uso de LangChain | `true` |
+| `AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT_NAME` | Modelo de embeddings a utilizar | `text-embedding-ada-002` |
+| `LANGCHAIN_VECTORSTORE_DIR` | Directorio para almacenar vectorstores | `data/vectorstores` |
+| `LANGCHAIN_CHUNK_SIZE` | Tamaño de los chunks para dividir documentos | `1000` |
+| `LANGCHAIN_CHUNK_OVERLAP` | Superposición entre chunks consecutivos | `200` |
 
 ### Azure Cognitive Search
 
@@ -92,6 +103,13 @@ OPENAI_MODEL=gpt-4o-mini
 MAX_TOKENS=4000
 TEMPERATURE=0.7
 
+# LangChain
+USE_LANGCHAIN=true
+AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT_NAME=text-embedding-ada-002
+LANGCHAIN_VECTORSTORE_DIR=data/vectorstores
+LANGCHAIN_CHUNK_SIZE=1000
+LANGCHAIN_CHUNK_OVERLAP=200
+
 # Azure Cognitive Search
 AZURE_SEARCH_ENDPOINT=https://your-search-instance.search.windows.net
 AZURE_SEARCH_API_KEY=your_search_api_key_here
@@ -142,6 +160,46 @@ Para un rendimiento óptimo de búsqueda:
 - Configurar sinónimos para términos técnicos comunes
 - Implementar caché para consultas frecuentes
 - Monitorear el uso de cuota y rendimiento
+
+## Configuración de LangChain
+
+LangChain proporciona funcionalidades avanzadas de procesamiento de lenguaje natural y gestión de contexto. Para una configuración óptima:
+
+### Activación y Desactivación
+
+LangChain puede activarse o desactivarse mediante la variable de entorno `USE_LANGCHAIN`. Por defecto, está activado:
+
+```python
+os.environ["USE_LANGCHAIN"] = "true"  # Activar LangChain por defecto
+```
+
+También puede configurarse en el archivo `.env`:
+
+```dotenv
+USE_LANGCHAIN=true
+```
+
+### Embeddings
+
+Para la búsqueda vectorial, LangChain utiliza embeddings generados por Azure OpenAI. Se recomienda:
+
+- Utilizar el modelo `text-embedding-ada-002` para los embeddings
+- Configurar la variable `AZURE_OPENAI_EMBEDDINGS_DEPLOYMENT_NAME` con el nombre del despliegue del modelo de embeddings
+
+### Vectorstores
+
+Los vectorstores almacenan los embeddings para búsqueda semántica. Recomendaciones:
+
+- Configurar `LANGCHAIN_VECTORSTORE_DIR` para especificar dónde se almacenarán los vectorstores
+- Asegurarse de que el directorio tenga permisos de escritura
+- Considerar la persistencia de vectorstores entre reinicios para mejorar el rendimiento
+
+### Chunking
+
+La división de documentos en chunks es crucial para la búsqueda semántica. Recomendaciones:
+
+- Ajustar `LANGCHAIN_CHUNK_SIZE` según la granularidad deseada (valores más pequeños para búsquedas más precisas)
+- Configurar `LANGCHAIN_CHUNK_OVERLAP` para mantener contexto entre chunks (valores más altos para mejor coherencia)
 
 ## Configuración de Seguridad
 

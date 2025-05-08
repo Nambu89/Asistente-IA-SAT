@@ -31,6 +31,14 @@ SvanIA sigue una arquitectura modular basada en servicios, diseñada para propor
 | (GPT-4o-mini)      | | Search           | | (Análisis de     |
 |                    | |                  | | imágenes)        |
 +--------------------+ +------------------+ +------------------+
+          |
+          |
++---------v----------+     +------------------+
+|                    |     |                  |
+| LangChain          |<--->| Vectorstores     |
+| (Contexto y RAG)   |     | (FAISS)          |
+|                    |     |                  |
++--------------------+     +------------------+
 ```
 
 ## Componentes Principales
@@ -47,9 +55,13 @@ El backend está implementado con FastAPI, un framework moderno de Python para c
 
 ### 2. Servicios de IA
 
-SvanIA integra varios servicios de IA de Azure:
+SvanIA integra varios servicios de IA de Azure y bibliotecas avanzadas:
 
 - **Azure OpenAI**: Proporciona modelos de lenguaje avanzados (GPT-4o-mini) para generar respuestas contextuales
+- **LangChain**: Framework para mejorar el contexto y la búsqueda semántica
+  - **Vectorstores (FAISS)**: Almacenamiento de embeddings para búsqueda vectorial
+  - **Memoria de Conversación**: Sistemas avanzados para mantener el contexto
+  - **RAG (Retrieval-Augmented Generation)**: Combina recuperación de información con generación de texto
 - **Azure Cognitive Search**: Permite buscar información relevante en manuales técnicos
 - **Azure AI Foundry**: Proporciona capacidades de análisis de imágenes y OCR
 
@@ -71,8 +83,14 @@ SvanIA integra varios servicios de IA de Azure:
 1. El usuario envía un mensaje a través de la interfaz web
 2. El backend recibe la solicitud y extrae la información relevante
 3. Si el mensaje contiene imágenes, se procesan con Azure AI Foundry
-4. Se busca información relevante en manuales técnicos mediante Azure Cognitive Search
-5. Se genera una respuesta utilizando Azure OpenAI
+4. Si LangChain está habilitado:
+   - Se detecta si el mensaje menciona un modelo específico
+   - Se crea o recupera un vectorstore para ese modelo
+   - Se realiza una búsqueda semántica utilizando embeddings
+   - Se utiliza RAG para combinar la información recuperada con la generación de texto
+5. Si LangChain no está habilitado o falla:
+   - Se busca información relevante en manuales técnicos mediante Azure Cognitive Search
+   - Se genera una respuesta utilizando Azure OpenAI directamente
 6. La respuesta se envía al usuario y se almacena en el historial de conversación
 7. El historial se guarda en Redis para futuras referencias
 
@@ -97,3 +115,6 @@ La arquitectura está diseñada para ser escalable:
 - **Repository**: Abstracción del acceso a datos
 - **Dependency Injection**: Inyección de dependencias para facilitar pruebas y mantenimiento
 - **Async/Await**: Patrón para operaciones asíncronas
+- **Feature Flag**: Permite activar o desactivar LangChain según sea necesario
+- **Fallback**: Sistema de respaldo que vuelve al flujo tradicional si LangChain falla
+- **Chain of Responsibility**: Implementado en LangChain para procesar mensajes en etapas

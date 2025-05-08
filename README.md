@@ -9,6 +9,7 @@ SvanIA es un asistente técnico especializado en productos del Grupo SVAN (SVAN,
 SvanIA utiliza tecnologías avanzadas de inteligencia artificial para proporcionar asistencia técnica precisa y contextual. La aplicación integra:
 
 - **Azure OpenAI (GPT-4o-mini)** para generación de respuestas inteligentes
+- **LangChain** para mejorar el contexto y la búsqueda semántica
 - **Azure Cognitive Search** para búsqueda en manuales técnicos
 - **Azure AI Foundry** para análisis de imágenes
 - **Redis** para caché y persistencia de datos
@@ -16,7 +17,8 @@ SvanIA utiliza tecnologías avanzadas de inteligencia artificial para proporcion
 ## Características Principales
 
 - 💬 **Chat Interactivo**: Interfaz de conversación natural y contextual
-- 🔍 **Búsqueda Inteligente**: Encuentra información relevante en manuales técnicos
+- 🧠 **Contexto Mejorado**: LangChain mantiene mejor el hilo de las conversaciones
+- 🔍 **Búsqueda Vectorial**: Encuentra información semánticamente relevante en manuales técnicos
 - 📊 **Análisis de Imágenes**: Procesa imágenes para diagnóstico visual
 - 📱 **Diseño Responsivo**: Funciona en dispositivos móviles y de escritorio
 - 🔒 **Seguridad Optimizada**: Implementa HTTPS y políticas de seguridad
@@ -56,8 +58,10 @@ La documentación completa está disponible en el directorio [docs](./docs):
 
 - Python 3.8+
 - Redis
+- LangChain 0.3.25+
 - Acceso a servicios de Azure (OpenAI, Cognitive Search, AI Foundry)
 - Variables de entorno configuradas (ver archivo `.env.example`)
+- Modelo de embeddings para búsqueda vectorial (por defecto: text-embedding-ada-002)
 
 ## Despliegue
 

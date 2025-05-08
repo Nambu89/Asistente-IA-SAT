@@ -4,7 +4,17 @@ from fastapi.templating import Jinja2Templates
 from typing import List, Optional
 from app.services.chat_services import ChatService
 import os
+import logging
 from pathlib import Path
+
+# Importar rutas de LangChain si está disponible
+try:
+    from app.api.endpoints import langchain
+    LANGCHAIN_ROUTES_AVAILABLE = True
+    logging.getLogger(__name__).info("Rutas de LangChain disponibles")
+except ImportError:
+    LANGCHAIN_ROUTES_AVAILABLE = False
+    logging.getLogger(__name__).warning("Rutas de LangChain no disponibles")
 
 router = APIRouter()
 templates = Jinja2Templates(directory="templates")
