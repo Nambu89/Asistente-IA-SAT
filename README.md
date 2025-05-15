@@ -84,7 +84,7 @@ Si desea contribuir al desarrollo de SvanIA, consulte la [guía de desarrollo](.
 
 ## Licencia
 
-Propiedad de Grupo SVAN. Todos los derechos reservados.
+Propiedad de Fernando Prada. Todos los derechos reservados.
 
 ## Contacto
 
