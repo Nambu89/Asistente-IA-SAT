@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # Versión de la aplicación
     APP_VERSION: str = "1.1.0"
     
-    # OpenAI/Azure OpenAI
+    # Azure AI Foundry model deployment (with Azure OpenAI-compatible settings)
     OPENAI_API_KEY: str = os.getenv("AZURE_OPENAI_API_KEY", "")
     AZURE_OPENAI_ENDPOINT: str = os.getenv("AZURE_OPENAI_ENDPOINT", "")
     AZURE_OPENAI_API_VERSION: str = os.getenv("AZURE_OPENAI_API_VERSION", "2025-01-01-preview")
@@ -68,7 +68,7 @@ class Settings(BaseSettings):
 
     # Configuración de la aplicación
     DEBUG: bool = os.getenv("DEBUG", "False").lower() == "true"
-    ALLOWED_HOSTS: List[str] = os.getenv("ALLOWED_HOSTS", "*").split(",")
+    ALLOWED_HOSTS: List[str] = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1,::1,testserver").split(",")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     
     # Archivos permitidos
@@ -88,9 +88,9 @@ class Settings(BaseSettings):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         if not self.OPENAI_API_KEY:
-            raise ValueError("No se encontró la clave de API de Azure OpenAI")
+            raise ValueError("No se encontró la clave de API para Azure AI Foundry / Azure OpenAI")
         if not self.AZURE_OPENAI_ENDPOINT:
-            raise ValueError("No se encontró el endpoint de Azure OpenAI")
+            raise ValueError("No se encontró el endpoint de Azure AI Foundry / Azure OpenAI")
         
         # Asegurar que existen los directorios necesarios
         self.PDF_DIR.mkdir(parents=True, exist_ok=True)

@@ -1,13 +1,15 @@
-version: '3'
 services:
   web:
-    image: svaniaregistry.azurecr.io/svania:v1.2.2
+    build: .
+    image: asistente-ia-sat:local
     ports:
       - "8000:8000"
     environment:
       - NODE_ENV=production
       - WEBSITES_PORT=8000
-      - WEBSITE_SITE_NAME=svania
+      - PORT=8000
+      - PRODUCTION=true
+      - ENABLE_DEBUG_ENDPOINTS=false
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 30s

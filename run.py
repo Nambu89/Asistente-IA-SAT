@@ -9,10 +9,11 @@ os.environ["PYTHONPATH"] = str(root_dir)
 
 if __name__ == "__main__":
     import uvicorn
+    port = int(os.getenv("PORT", os.getenv("WEBSITES_PORT", "8000")))
     uvicorn.run(
         "app.main:app",
         host="127.0.0.1",
-        port=5000,
+        port=port,
         reload=True,
         reload_dirs=[str(root_dir)]
     ) 

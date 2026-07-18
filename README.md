@@ -8,16 +8,18 @@
 
 ### Overview
 
-Technical Support AI Assistant is a FastAPI-based reference project for building a support assistant over technical manuals and product documentation.
+Technical Support AI Assistant is a FastAPI-based reference project for building a support assistant over technical manuals and product documentation, positioned as a Microsoft-first MVP on Azure.
 
 It combines:
 
-- **Azure OpenAI / Azure AI Foundry** for response generation and multimodal reasoning
+- **Azure AI Foundry model deployments** for response generation and multimodal reasoning
 - **Azure AI Search** for retrieval over indexed manuals
 - **Redis** for short-term memory and response caching
 - **Jinja2 + Tailwind CSS** for a lightweight web UI
 
 This repository has been sanitized to be **generic and reusable**. It is no longer tied to any specific company or product catalog.
+
+The codebase still contains some Azure OpenAI-compatible transport and environment variable names. That compatibility layer is intentional for now to keep the MVP functional while the remaining migration to the latest Foundry patterns is completed incrementally.
 
 ### Current status
 
@@ -35,7 +37,7 @@ This is a **reference implementation / MVP codebase**. It is useful for learning
 ### Tech stack
 
 - **Backend**: FastAPI, Jinja2, Python
-- **AI**: Azure OpenAI / Azure AI Foundry
+- **AI**: Azure AI Foundry model deployments
 - **Search**: Azure AI Search
 - **Cache**: Redis
 - **Frontend styling**: Tailwind CSS
@@ -74,12 +76,21 @@ Main variables:
 - `AZURE_OPENAI_ENDPOINT`
 - `AZURE_OPENAI_API_VERSION`
 - `AZURE_OPENAI_DEPLOYMENT_NAME`
+- `PORT`
+- `ENABLE_DEBUG_ENDPOINTS`
 - `AZURE_SEARCH_ENDPOINT`
 - `AZURE_SEARCH_API_KEY`
 - `AZURE_SEARCH_INDEX_NAME`
 - `REDIS_HOST`
 - `REDIS_PASSWORD`
 - `REDIS_PORT`
+
+### Security defaults in this repo
+
+- debug and diagnostic endpoints are disabled by default via `ENABLE_DEBUG_ENDPOINTS=false`
+- the local runtime and docs now use port `8000` consistently
+- `TrustedHostMiddleware` defaults to explicit local hosts instead of wildcard hosts
+- the container filesystem no longer relies on world-writable `777` permissions
 
 ### Recommended Microsoft deployment path
 
@@ -99,7 +110,7 @@ Good for:
 
 ### Recommended Microsoft production services
 
-- **Azure AI Foundry / Azure OpenAI**
+- **Azure AI Foundry**
 - **Azure AI Search**
 - **Azure Cache for Redis**
 - **Azure Key Vault**
@@ -120,11 +131,17 @@ Before making this repository public, you should still:
 
 Suggested next steps:
 
-- migrate to the latest Azure OpenAI / Foundry calling pattern (`/openai/v1/`)
+- complete the remaining migration from Azure OpenAI-compatible transport to the latest Foundry calling pattern (`/openai/v1/`)
 - replace legacy prompt/config coupling with cleaner adapters
 - add tests for routes, retrieval, and caching
 - add GitHub Actions CI
 - optionally split backend services more clearly
+
+### Documentation / Documentación
+
+- [Documentation index / Índice de documentación](docs/README.md)
+- [Azure MVP architecture diagram / Diagrama Azure MVP](docs/arquitectura_azure_mvp.md)
+- [Diagram placeholders / Marcadores para diagramas](docs/diagrams/README.md)
 
 ### License
 
@@ -136,16 +153,18 @@ MIT
 
 ### Descripción general
 
-Technical Support AI Assistant es un proyecto de referencia basado en FastAPI para construir un asistente de soporte técnico sobre manuales y documentación de producto.
+Technical Support AI Assistant es un proyecto de referencia basado en FastAPI para construir un asistente de soporte técnico sobre manuales y documentación de producto, planteado como un MVP Microsoft-first sobre Azure.
 
 Combina:
 
-- **Azure OpenAI / Azure AI Foundry** para generación de respuestas y razonamiento multimodal
+- **Despliegues de modelos en Azure AI Foundry** para generación de respuestas y razonamiento multimodal
 - **Azure AI Search** para recuperación sobre manuales indexados
 - **Redis** para memoria de corto plazo y caché de respuestas
 - **Jinja2 + Tailwind CSS** para una interfaz web ligera
 
 Este repositorio ha sido saneado para que sea **genérico y reutilizable**. Ya no está ligado a una empresa ni a un catálogo concreto.
+
+El código todavía conserva parte del transporte y algunas variables de entorno con naming compatible con Azure OpenAI. Esa capa de compatibilidad se mantiene de forma deliberada para no romper el MVP mientras la migración restante al patrón más actual de Foundry se hace por fases.
 
 ### Estado actual
 
@@ -163,7 +182,7 @@ Se trata de una **implementación de referencia / MVP**. Es útil para aprendiza
 ### Stack tecnológico
 
 - **Backend**: FastAPI, Jinja2, Python
-- **IA**: Azure OpenAI / Azure AI Foundry
+- **IA**: despliegues de modelos en Azure AI Foundry
 - **Búsqueda**: Azure AI Search
 - **Caché**: Redis
 - **Estilos frontend**: Tailwind CSS
@@ -202,12 +221,21 @@ Variables principales:
 - `AZURE_OPENAI_ENDPOINT`
 - `AZURE_OPENAI_API_VERSION`
 - `AZURE_OPENAI_DEPLOYMENT_NAME`
+- `PORT`
+- `ENABLE_DEBUG_ENDPOINTS`
 - `AZURE_SEARCH_ENDPOINT`
 - `AZURE_SEARCH_API_KEY`
 - `AZURE_SEARCH_INDEX_NAME`
 - `REDIS_HOST`
 - `REDIS_PASSWORD`
 - `REDIS_PORT`
+
+### Defaults de seguridad aplicados en este repo
+
+- los endpoints de debug y diagnóstico vienen desactivados por defecto con `ENABLE_DEBUG_ENDPOINTS=false`
+- runtime local y documentación quedan alineados en el puerto `8000`
+- `TrustedHostMiddleware` deja de permitir wildcard por defecto en local
+- el contenedor ya no depende de permisos globales `777`
 
 ### Ruta recomendada de despliegue en Microsoft
 
@@ -227,7 +255,7 @@ Buena para:
 
 ### Servicios Microsoft recomendados para producción
 
-- **Azure AI Foundry / Azure OpenAI**
+- **Azure AI Foundry**
 - **Azure AI Search**
 - **Azure Cache for Redis**
 - **Azure Key Vault**
@@ -248,7 +276,7 @@ Antes de hacer este repositorio público conviene todavía:
 
 Siguientes pasos recomendados:
 
-- migrar al patrón actual de Azure OpenAI / Foundry (`/openai/v1/`)
+- completar la migración restante desde transporte compatible con Azure OpenAI al patrón actual de Foundry (`/openai/v1/`)
 - desacoplar prompts y configuración legacy
 - añadir tests de rutas, retrieval y caché
 - añadir GitHub Actions CI

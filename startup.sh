@@ -3,25 +3,28 @@
 # Redirigir toda la salida del script a stdout/stderr para que Azure la capture
 exec 1>&1 2>&2
 
-# Habilitar modo de depuración para mostrar cada comando ejecutado
-set -x
-
 # Asegurarse de que el script no falle por errores en comandos individuales
 set +e
 
-# Mostrar información del sistema para depuración
-echo "===== SYSTEM INFORMATION ====="
-echo "Memory Info:"
-free -h || echo "WARNING: Failed to get memory info"
-echo "CPU Info:"
-cat /proc/cpuinfo | grep "model name" || echo "WARNING: Failed to get CPU info"
-echo "Running Processes:"
-ps aux || echo "WARNING: Failed to list processes"
+PORT_VALUE="${PORT:-8000}"
 
-# Verificar directorios y permisos
-echo "===== CHECKING DIRECTORIES ====="
-ls -la /app || echo "WARNING: Failed to list /app directory"
-ls -la /app/uploads /app/Manuales /app/temp /app/logs || echo "WARNING: Failed to list subdirectories"
+if [ "${STARTUP_DIAGNOSTICS:-false}" = "true" ]; then
+    set -x
+fi
+
+if [ "${STARTUP_DIAGNOSTICS:-false}" = "true" ]; then
+    echo "===== SYSTEM INFORMATION ====="
+    echo "Memory Info:"
+    free -h || echo "WARNING: Failed to get memory info"
+    echo "CPU Info:"
+    cat /proc/cpuinfo | grep "model name" || echo "WARNING: Failed to get CPU info"
+    echo "Running Processes:"
+    ps aux || echo "WARNING: Failed to list processes"
+
+    echo "===== CHECKING DIRECTORIES ====="
+    ls -la /app || echo "WARNING: Failed to list /app directory"
+    ls -la /app/uploads /app/Manuales /app/temp /app/logs || echo "WARNING: Failed to list subdirectories"
+fi
 
 # Verificar variables de entorno críticas (sin exponer valores completos)
 echo "===== CHECKING ENVIRONMENT VARIABLES ====="
@@ -44,9 +47,10 @@ else
 fi
 
 # Mostrar otras variables de entorno relevantes
-echo "PORT: ${PORT:-8000}"
+echo "PORT: ${PORT_VALUE}"
 echo "PYTHONPATH: $PYTHONPATH"
 echo "PRODUCTION: $PRODUCTION"
+echo "ENABLE_DEBUG_ENDPOINTS: ${ENABLE_DEBUG_ENDPOINTS:-false}"
 
 # Verificar Python y dependencias críticas
 echo "===== CHECKING PYTHON SETUP ====="
@@ -67,12 +71,12 @@ python -c "import fastapi; import redis; import azure.storage.blob; import azure
     python -c "import psutil" || echo "Failed to import psutil"
 }
 
-# Verificar que el puerto 8000 no esté ocupado
+# Verificar que el puerto configurado no esté ocupado
 echo "===== CHECKING NETWORK ====="
-if netstat -tuln | grep ':8000'; then
-    echo "WARNING: Port 8000 is already in use!"
+if netstat -tuln | grep ":${PORT_VALUE}"; then
+    echo "WARNING: Port ${PORT_VALUE} is already in use!"
 else
-    echo "Port 8000 is available"
+    echo "Port ${PORT_VALUE} is available"
 fi
 
 # Iniciar la aplicación con configuración productiva
@@ -81,7 +85,7 @@ export PYTHONPATH=/app
 
 # Crear directorio de logs (solo en /app que es donde tenemos permisos seguros)
 mkdir -p /app/logs
-chmod 777 /app/logs
+chmod 750 /app/logs
 
 # Configurar variables de entorno para HTTPS
 export FORWARDED_ALLOW_IPS="*"
@@ -103,7 +107,7 @@ gunicorn \
     --log-level $LOG_LEVEL \
     --capture-output \
     --forwarded-allow-ips="*" \
-    --bind 0.0.0.0:8000 \
+    --bind 0.0.0.0:${PORT_VALUE} \
     app.main:app &
     
 # Guardar el PID de gunicorn
@@ -120,7 +124,7 @@ if ps -p $GUNICORN_PID > /dev/null; then
     MAX_RETRIES=10
     
     while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-        if curl -s http://localhost:8000/health > /dev/null; then
+        if curl -s http://localhost:${PORT_VALUE}/health > /dev/null; then
             echo "Application is responding to health checks!"
             break
         else

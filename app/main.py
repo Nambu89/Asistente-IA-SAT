@@ -120,7 +120,11 @@ logger.info("Application Insights no está configurado y no se utilizará.")
 # Variables globales para servicios (singleton)
 settings = Settings()
 
-IS_PRODUCTION = os.getenv("PRODUCTION", "False").lower() == "true"
+def _env_flag(name: str, default: bool = False) -> bool:
+    return os.getenv(name, str(default)).lower() == "true"
+
+
+IS_PRODUCTION = _env_flag("PRODUCTION")
 
 
 def _parse_env_list(raw_value: str) -> list[str]:
@@ -128,19 +132,40 @@ def _parse_env_list(raw_value: str) -> list[str]:
 
 
 def _get_allowed_hosts() -> list[str]:
-    default_hosts = ["localhost", "127.0.0.1", "*"] if not IS_PRODUCTION else ["*"]
     configured_hosts = _parse_env_list(os.getenv("ALLOWED_HOSTS", ""))
-    return configured_hosts or default_hosts
+    if configured_hosts:
+        return configured_hosts
+
+    default_hosts = ["localhost", "127.0.0.1", "::1", "testserver"]
+    website_hostname = os.getenv("WEBSITE_HOSTNAME", "").strip()
+
+    if website_hostname:
+        default_hosts.append(website_hostname)
+
+    if IS_PRODUCTION and not website_hostname:
+        logger.warning("ALLOWED_HOSTS no configurado; se permiten solo hosts locales por defecto")
+
+    return default_hosts
 
 
 def _get_cors_origins() -> list[str]:
     default_origins = [
         "http://localhost:3000",
+        "http://127.0.0.1:3000",
         "http://localhost:8000",
         "http://127.0.0.1:8000",
     ] if not IS_PRODUCTION else []
     configured_origins = _parse_env_list(os.getenv("CORS_ALLOW_ORIGINS", ""))
     return configured_origins or default_origins
+
+
+def _debug_endpoints_enabled() -> bool:
+    return _env_flag("ENABLE_DEBUG_ENDPOINTS")
+
+
+def _require_debug_endpoints() -> None:
+    if not _debug_endpoints_enabled():
+        raise HTTPException(status_code=404, detail="Endpoint no disponible")
 
 # Funciones para inicialización y limpieza de recursos
 @asynccontextmanager
@@ -186,7 +211,7 @@ async def initialize_search_service():
 
 async def initialize_openai_service():
     app.state.openai_service = AzureOpenAIService()
-    logger.info("Servicio de OpenAI inicializado")
+    logger.info("Servicio de inferencia compatible con Azure AI Foundry inicializado")
 
 async def initialize_ai_foundry_service():
     app.state.ai_foundry_service = AzureAIFoundryService()
@@ -211,8 +236,8 @@ async def periodic_health_check():
 # Inicializar FastAPI con documentación personalizada
 app = FastAPI(
     title="Technical Support AI Assistant",
-    description="Generic AI-powered technical support assistant built with FastAPI and Azure services",
-    version="1.0.0",
+    description="Azure AI Foundry MVP for technical support over manuals and product documentation",
+    version=settings.APP_VERSION,
     docs_url="/api/docs" if not IS_PRODUCTION else None,
     redoc_url="/api/redoc" if not IS_PRODUCTION else None,
     lifespan=lifespan  # Usar el gestor de contexto para lifecycle events
@@ -221,14 +246,11 @@ app = FastAPI(
 # Middleware para manejar X-Forwarded-Proto y forzar HTTPS en las URLs generadas
 class HTTPSRedirectMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # Detectar si estamos en producción (Azure)
-        is_production = not (request.url.hostname == 'localhost' or request.url.hostname == '127.0.0.1')
-        
         # Comprobar si ya estamos en HTTPS o si hay un proxy que indica HTTPS
         is_https = request.url.scheme == 'https' or request.headers.get("X-Forwarded-Proto") == "https"
         
         # Solo redirigir si estamos en producción, la solicitud es HTTP, y no hay indicación de HTTPS en los encabezados
-        if is_production and not is_https and request.url.scheme == 'http':
+        if IS_PRODUCTION and not is_https and request.url.scheme == 'http':
             # Evitar bucles de redirección comprobando encabezados adicionales
             redirect_count = int(request.headers.get("X-Redirect-Count", "0"))
             if redirect_count < 3:  # Limitar a un máximo de 3 redirecciones
@@ -237,7 +259,7 @@ class HTTPSRedirectMiddleware(BaseHTTPMiddleware):
                 return Response(status_code=301, headers=headers)
         
         # Establecer el esquema a HTTPS en producción para las URLs generadas
-        if is_production:
+        if IS_PRODUCTION:
             request.scope["scheme"] = "https"
             
         response = await call_next(request)
@@ -292,8 +314,7 @@ async def read_root(request: Request):
 @app.get("/debug/list_all_documents")
 async def list_all_documents():
     """Endpoint de diagnóstico para listar todos los documentos en el índice"""
-    if os.getenv("PRODUCTION"):
-        raise HTTPException(status_code=404, detail="Endpoint no disponible en producción")
+    _require_debug_endpoints()
     try:
         start_time = time.time()
         all_docs = await app.state.search_service.search_manuals()
@@ -355,6 +376,7 @@ async def health_check():
 @app.get("/diagnostico/redis", response_class=JSONResponse)
 async def redis_diagnostico():
     """Endpoint para diagnóstico detallado de Redis."""
+    _require_debug_endpoints()
     try:
         import socket
         import platform
@@ -488,6 +510,7 @@ async def redis_diagnostico():
 @app.get('/debug/logs')
 def view_logs():
     """Endpoint para ver los últimos logs de la aplicación"""
+    _require_debug_endpoints()
     try:
         # Verificar si estamos en producción y si el usuario tiene acceso
         # En un entorno real, deberías implementar autenticación aquí

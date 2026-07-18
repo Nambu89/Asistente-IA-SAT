@@ -24,6 +24,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PRODUCTION=true \
     PORT=8000 \
+    ENABLE_DEBUG_ENDPOINTS=false \
+    STARTUP_DIAGNOSTICS=false \
     PYTHONPATH=/app
 
 # Instalar dependencias del sistema incluyendo herramientas de depuración
@@ -77,9 +79,9 @@ COPY applicationHost.xdt /app/applicationHost.xdt
 RUN dos2unix /app/.deployment /app/web.config /app/cors.json /app/applicationHost.xdt && \
     chmod 644 /app/.deployment /app/web.config /app/cors.json /app/applicationHost.xdt
 
-# Crear directorios necesarios con permisos amplios
+# Crear directorios necesarios con permisos ajustados al usuario de la app
 RUN mkdir -p /app/uploads /app/Manuales /app/temp /app/logs && \
-    chmod -R 777 /app/uploads /app/Manuales /app/temp /app/logs
+    chmod 750 /app/uploads /app/Manuales /app/temp /app/logs
 
 # Copiar el resto del código de la aplicación
 COPY app/ /app/app/
@@ -98,7 +100,7 @@ EXPOSE 8000
 
 # Verificar la salud de la aplicación con tiempo de inicio más amplio
 HEALTHCHECK --interval=30s --timeout=10s --start-period=240s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
 
 # Usar el script de inicio
 CMD ["/app/startup.sh"]
