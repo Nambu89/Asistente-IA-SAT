@@ -1,6 +1,6 @@
-# API de SvanIA
+# API de Technical Support AI Assistant
 
-Este documento describe los endpoints de la API de SvanIA, sus parámetros, respuestas y ejemplos de uso.
+Este documento describe los endpoints de la API del asistente, sus parámetros, respuestas y ejemplos de uso.
 
 ## Índice
 
@@ -55,8 +55,8 @@ GET /
   "session_id": "session_1234567890",
   "rating": 5,
   "comment": "Excelente respuesta, muy útil",
-  "query": "¿Cómo solucionar error E4 en lavadora SVAN?",
-  "response": "El error E4 en lavadoras SVAN indica un problema con..."
+  "query": "¿Cómo solucionar error E4 en una lavadora modelo LAV123?",
+  "response": "El error E4 en el modelo LAV123 indica un problema con..."
 }
 ```
 
@@ -85,13 +85,13 @@ GET /
 POST /chat/full
 Content-Type: multipart/form-data
 
-message=¿Cómo solucionar error E4 en lavadora SVAN?
+message=¿Cómo solucionar error E4 en una lavadora modelo LAV123?
 ```
 
 **Ejemplo de respuesta**:
 ```json
 {
-  "response": "El error E4 en lavadoras SVAN indica un problema con el suministro de agua...",
+  "response": "El error E4 en el modelo LAV123 indica un problema con el suministro de agua...",
   "session_id": "session_1234567890",
   "model": "gpt-4o-mini",
   "processing_time": 1.5,
@@ -134,9 +134,9 @@ message=¿Cómo solucionar error E4 en lavadora SVAN?
   "time_elapsed_seconds": 0.5,
   "documents": [
     {
-      "name": "Manual_SVAN_LAV123.pdf",
+      "name": "Manual_LAV123.pdf",
       "modelo": "LAV123",
-      "path": "/manuales/lavadoras/Manual_SVAN_LAV123.pdf"
+      "path": "/manuales/lavadoras/Manual_LAV123.pdf"
     },
     ...
   ]

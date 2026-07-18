@@ -1,6 +1,6 @@
-# Guía de Desarrollo de SvanIA
+# Guía de Desarrollo de Technical Support AI Assistant
 
-Este documento proporciona información para desarrolladores que deseen contribuir o extender la funcionalidad de SvanIA.
+Este documento proporciona información para desarrolladores que deseen contribuir o extender la funcionalidad del asistente.
 
 ## Índice
 
@@ -19,7 +19,7 @@ Este documento proporciona información para desarrolladores que deseen contribu
 1. Clone el repositorio:
    ```bash
    git clone <url-del-repositorio>
-   cd SvanIA
+   cd Asistente-IA-SAT
    ```
 
 2. Cree y active un entorno virtual:
@@ -57,10 +57,10 @@ Este documento proporciona información para desarrolladores que deseen contribu
 
 ## Estructura del Proyecto
 
-SvanIA sigue una estructura modular organizada por funcionalidad:
+El repositorio sigue una estructura modular organizada por funcionalidad:
 
 ```
-SvanIA/
+Asistente-IA-SAT/
 ├── app/                    # Código principal de la aplicación
 │   ├── __init__.py         # Inicialización del paquete
 │   ├── main.py             # Punto de entrada principal
@@ -107,7 +107,7 @@ SvanIA/
 
 ## Patrones de Diseño
 
-SvanIA implementa varios patrones de diseño para mantener el código organizado y mantenible:
+El proyecto implementa varios patrones de diseño para mantener el código organizado y mantenible:
 
 ### Singleton
 
@@ -167,7 +167,7 @@ def create_openai_service(settings):
 
 ## Guía de Estilo
 
-SvanIA sigue las convenciones de estilo de Python (PEP 8) con algunas adaptaciones:
+El proyecto sigue las convenciones de estilo de Python (PEP 8) con algunas adaptaciones:
 
 ### Convenciones de Nomenclatura
 
@@ -220,7 +220,7 @@ from app.core.settings import Settings
 
 ## Pruebas
 
-SvanIA utiliza pytest para pruebas unitarias e integración:
+El proyecto utiliza pytest para pruebas unitarias e integración:
 
 ### Estructura de Pruebas
 

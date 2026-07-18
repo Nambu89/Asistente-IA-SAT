@@ -276,7 +276,7 @@ Manual técnico:
         words = re.findall(r'\b\w+\b', message_upper)
         
         # Patrones más específicos para modelos de electrodomésticos
-        # 1. Debe comenzar con S, W, A o H (marcas conocidas)
+        # 1. Debe comenzar con S, W, A o H (series observadas en manuales legacy)
         # 2. Debe contener al menos un número
         # 3. Debe tener una longitud típica de modelo (3-10 caracteres)
         # 4. Debe ser una palabra completa, no parte de otra palabra
@@ -320,12 +320,12 @@ Manual técnico:
         """
         Determina la marca y tipo de producto basado en el modelo
         """
-        # Mapeo de letras iniciales a marcas
+        # Mapeo de letras iniciales a series genéricas
         brands = {
-            'S': 'SVAN',
-            'W': 'WONDER',
-            'A': 'ASPES',
-            'H': 'HYUNDAI'
+            'S': 'Serie S',
+            'W': 'Serie W',
+            'A': 'Serie A',
+            'H': 'Serie H'
         }
         
         # Mapeo de códigos a tipos de producto

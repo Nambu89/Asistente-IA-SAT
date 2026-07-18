@@ -39,7 +39,7 @@ class Settings(BaseSettings):
 
     # Configuración del chatbot
     SYSTEM_PROMPT: str = """
-    Eres svania, un asistente técnico especializado en los productos del Grupo SVAN (SVAN, WONDER, ASPES e HYUNDAI). Tu función es ayudar al personal del SAT con problemas técnicos.
+    Eres un asistente IA de soporte técnico especializado en manuales técnicos y documentación de producto. Tu función es ayudar al personal de soporte con problemas técnicos, diagnóstico inicial y uso de manuales.
     [Resto del prompt omitido por brevedad]
     """
 

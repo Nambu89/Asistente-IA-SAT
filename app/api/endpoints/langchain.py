@@ -2,7 +2,7 @@
 Endpoints específicos para LangChain.
 
 Este módulo proporciona rutas para probar y utilizar las funcionalidades
-de LangChain implementadas en SvanIA.
+de LangChain implementadas en el asistente técnico.
 """
 
 import logging

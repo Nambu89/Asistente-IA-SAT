@@ -223,8 +223,8 @@ class ConversationHandler:
         """
         Determina la marca y tipo de producto basado en el modelo.
         """
-        brand_map = {'A': 'ASPES', 'S': 'SVAN', 'W': 'WONDER', 'H': 'HYUNDAI'}
-        brand = brand_map.get(model[0].upper(), 'Desconocida')
+        series_map = {'A': 'Serie A', 'S': 'Serie S', 'W': 'Serie W', 'H': 'Serie H'}
+        brand = series_map.get(model[0].upper(), 'Serie no identificada')
         
         product_prefixes = {
             'HYL': 'lavadora',
@@ -498,7 +498,7 @@ async def fullchat(
         logger.info(f"========== INICIO PROCESAMIENTO /fullchat SESIÓN: {session_id[:8]} ==========")
         
         if not message and not attachments:
-            return {"response": "¡Hola! Soy SvanIA, el Asistente Técnico de SVAN. ¿En qué puedo ayudarte hoy?"}
+            return {"response": "¡Hola! Soy el Asistente IA de Soporte Técnico. ¿En qué puedo ayudarte hoy?"}
             
         if message:
             logger.info(f"Mensaje recibido: {message[:100]}" + ("..." if len(message) > 100 else ""))
@@ -566,7 +566,7 @@ async def fullchat(
         # Manejar casos sin modelo
         if not model:
             if message and await ConversationHandler.is_greeting(message):
-                response = "¡Hola! Me alegro de saludarte. ¿En qué puedo ayudarte hoy? Puedo responder preguntas sobre electrodomésticos del Grupo SVAN (SVAN, WONDER, ASPES e HYUNDAI) y ayudarte con problemas técnicos específicos."
+                response = "¡Hola! Me alegro de saludarte. ¿En qué puedo ayudarte hoy? Puedo responder preguntas sobre electrodomésticos, manuales técnicos y ayudarte con problemas específicos a partir de la documentación disponible."
                 
                 session_data["messages"].append({"role": "user", "content": message})
                 session_data["messages"].append({"role": "assistant", "content": response})
@@ -582,9 +582,9 @@ async def fullchat(
             
             if message and await ConversationHandler.is_help_request(message):
                 help_response = """
-Soy SvanIA, el Asistente Técnico especializado en productos del Grupo SVAN. Puedo ayudarte de las siguientes maneras:
+Soy el Asistente IA de Soporte Técnico. Puedo ayudarte de las siguientes maneras:
 
-1. **Consultas técnicas**: Pregúntame sobre cualquier modelo específico (empiezan con S para SVAN, W para WONDER, A para ASPES o H para HYUNDAI).
+1. **Consultas técnicas**: Pregúntame sobre cualquier modelo o referencia específica que aparezca en el equipo o en el manual.
 
 2. **Análisis de imágenes**: Puedes subir fotos de:
    - Códigos de error en displays
@@ -690,7 +690,7 @@ Para obtener la mejor ayuda, menciona siempre el modelo específico del electrod
                     4. Estado general del aparato
                     5. Si ves un código de error, explica su significado si lo conoces
                     
-                    Si identificas un modelo específico, inclúyelo en tu respuesta. Recuerda que el código suele comenzar con S (SVAN), W (WONDER), A (ASPES) o H (HYUNDAI).
+                    Si identificas un modelo específico, inclúyelo en tu respuesta. Si aparece una referencia de serie, cítala tal y como se vea en la etiqueta o en el display.
                     """}
                 ]
                 
@@ -746,7 +746,7 @@ Para obtener la mejor ayuda, menciona siempre el modelo específico del electrod
                     return json_response
             
             if not model:
-                basic_response = "Para poder ayudarte de forma más precisa, necesito conocer el modelo específico de tu electrodoméstico. ¿Podrías indicarme el modelo exacto? Debe comenzar con S (SVAN), W (WONDER), A (ASPES) o H (HYUNDAI)."
+                basic_response = "Para poder ayudarte de forma más precisa, necesito conocer el modelo específico de tu electrodoméstico. ¿Podrías indicarme la referencia exacta que aparece en la etiqueta o en el manual?"
                 
                 if message:
                     session_data["messages"].append({"role": "user", "content": message})
@@ -856,7 +856,7 @@ Marca: {brand}
 Tipo: {product_type}
 
 INSTRUCCIONES CRÍTICAS:
-1. Eres SvanIA, un asistente técnico especializado. Usa ÚNICAMENTE la información del manual técnico proporcionado.
+1. Eres un asistente IA de soporte técnico especializado. Usa UNICAMENTE la información del manual técnico proporcionado.
 2. DEBES leer y analizar el manual completo solo cuando sea necesario para responder a preguntas específicas.
 3. ATENCIÓN: El manual puede contener soluciones para problemas comunes incluso si no están codificados como errores (E1, E2, etc.):
    - Si el usuario menciona problemas como "no hace chispa", "huele a gas", "no enciende", busca estas palabras clave en el manual.
@@ -879,7 +879,7 @@ El manual técnico para el modelo {model} contiene información sobre seguridad,
         
         messages = [
             {"role": "system", "content": settings.SYSTEM_PROMPT},
-            {"role": "system", "content": "IMPORTANTE: Tu nombre es SvanIA, no Svaniano. Eres el Asistente Técnico de SVAN. Tienes la capacidad de analizar imágenes. Cuando los usuarios pregunten si puedes procesar o analizar imágenes, debes responder que SÍ y explicar tus capacidades de análisis visual."},
+            {"role": "system", "content": "IMPORTANTE: Eres el Asistente IA de Soporte Técnico. Tienes la capacidad de analizar imágenes. Cuando los usuarios pregunten si puedes procesar o analizar imágenes, debes responder que SI y explicar tus capacidades de análisis visual."},
         ]
         
         if session_data.get("context_summary"):

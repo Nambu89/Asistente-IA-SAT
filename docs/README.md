@@ -1,12 +1,12 @@
-# SvanIA - Asistente Técnico
+# Technical Support AI Assistant / Asistente IA de Soporte Técnico
 
-SvanIA es un asistente técnico especializado en productos del Grupo SVAN (SVAN, WONDER, ASPES e HYUNDAI), diseñado para ayudar al personal del SAT (Servicio de Asistencia Técnica) con problemas técnicos.
+Este proyecto es un asistente técnico genérico orientado a manuales y documentación de producto, diseñado para ayudar al personal de soporte con problemas técnicos.
 
 ## Descripción General
 
-SvanIA es una aplicación web basada en FastAPI que integra servicios de Azure OpenAI, Azure Cognitive Search y Azure AI Foundry para proporcionar un asistente virtual capaz de:
+Technical Support AI Assistant es una aplicación web basada en FastAPI que integra servicios de Azure OpenAI, Azure Cognitive Search y Azure AI Foundry para proporcionar un asistente virtual capaz de:
 
-- Responder consultas técnicas sobre productos del Grupo SVAN
+- Responder consultas técnicas sobre productos documentados en manuales
 - Buscar información en manuales técnicos
 - Procesar imágenes para análisis visual
 - Mantener conversaciones contextuales
@@ -55,7 +55,7 @@ La aplicación está configurada para desplegarse en Azure App Service, con sopo
 
 ## Documentación Adicional
 
-Para información más detallada sobre los componentes y funcionalidades de SvanIA, consulte los siguientes documentos:
+Para información más detallada sobre los componentes y funcionalidades del asistente, consulte los siguientes documentos:
 
 - [Arquitectura](./arquitectura.md)
 - [Servicios](./servicios.md)

@@ -36,7 +36,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const imageViewerClose = document.getElementById('image-viewer-close');
     const imageViewerDownload = document.getElementById('image-viewer-download');
     const imageViewerCaption = document.getElementById('image-viewer-caption');
-    const API_BASE_URL = ensureHttps(window.API_URL || 'https://svania.azurewebsites.net');
+    const API_BASE_URL = ensureHttps(window.API_URL || window.location.origin);
 
     // ==================== ESTADO DE LA APLICACIÓN ====================
     let attachments = [];
@@ -1266,7 +1266,7 @@ document.addEventListener('DOMContentLoaded', function() {
     function clearChat() {
         chatMessages.innerHTML = '';
         hideConfirmModal();
-        addMessage('¡Hola! Soy SvanIA, el Asistente Técnico de SVAN. ¿En qué puedo ayudarte hoy?', 'bot');
+        addMessage('¡Hola! Soy el Asistente IA de Soporte Técnico. ¿En qué puedo ayudarte hoy?', 'bot');
         
         // Limpiar adjuntos
         attachments = [];
@@ -1497,7 +1497,7 @@ document.addEventListener('DOMContentLoaded', function() {
         function suggestHelp() {
             // Solo sugerir ayuda si el usuario no está escribiendo actualmente
             if (!isUserTyping && !isProcessing) {
-                addMessage("¿Necesitas ayuda adicional? Puedo asistirte con cualquier otra consulta sobre electrodomésticos del Grupo SVAN.", "bot");
+                addMessage("¿Necesitas ayuda adicional? Puedo asistirte con cualquier otra consulta técnica sobre manuales, diagnóstico y uso de equipos.", "bot");
             }
         }
         

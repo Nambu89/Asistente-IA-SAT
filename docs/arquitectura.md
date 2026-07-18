@@ -1,8 +1,8 @@
-# Arquitectura de SvanIA
+# Arquitectura de Technical Support AI Assistant
 
 ## Visión General
 
-SvanIA sigue una arquitectura modular basada en servicios, diseñada para proporcionar un asistente técnico inteligente y escalable. La aplicación está construida sobre FastAPI y se integra con varios servicios de Azure para proporcionar funcionalidades avanzadas de IA.
+Technical Support AI Assistant sigue una arquitectura modular basada en servicios, diseñada para proporcionar un asistente técnico inteligente y escalable. La aplicación está construida sobre FastAPI y se integra con varios servicios de Azure para proporcionar funcionalidades avanzadas de IA.
 
 ## Diagrama de Arquitectura
 
@@ -55,7 +55,7 @@ El backend está implementado con FastAPI, un framework moderno de Python para c
 
 ### 2. Servicios de IA
 
-SvanIA integra varios servicios de IA de Azure y bibliotecas avanzadas:
+El asistente integra varios servicios de IA de Azure y bibliotecas avanzadas:
 
 - **Azure OpenAI**: Proporciona modelos de lenguaje avanzados (GPT-4o-mini) para generar respuestas contextuales
 - **LangChain**: Framework para mejorar el contexto y la búsqueda semántica

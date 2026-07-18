@@ -77,8 +77,8 @@ class AzureAIFoundryService:
                         })
                     else:
                         logger.info(f"Encontrado manual para {model_number}, longitud: {len(content)} caracteres")
-                        brand_map = {'A': 'ASPES', 'S': 'SVAN', 'W': 'WONDER', 'H': 'HYUNDAI'}
-                        brand = brand_map.get(model_number[0], 'Desconocida')
+                        series_map = {'A': 'Serie A', 'S': 'Serie S', 'W': 'Serie W', 'H': 'Serie H'}
+                        brand = series_map.get(model_number[0], 'Serie no identificada')
                         
                         # Limitar tamaño del contenido para reducir tokens
                         max_content_length = min(15000, int(self.settings.MAX_TOKENS or 2000) * 4)

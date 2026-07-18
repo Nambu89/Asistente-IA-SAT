@@ -1,91 +1,259 @@
-# SvanIA - Asistente Técnico
+# Technical Support AI Assistant / Asistente IA de Soporte Técnico
 
-![SvanIA Logo](static/images/logo.png)
+[English](#english) · [Español](#español)
 
-SvanIA es un asistente técnico especializado en productos del Grupo SVAN (SVAN, WONDER, ASPES e HYUNDAI), diseñado para ayudar al personal del SAT (Servicio de Asistencia Técnica) con problemas técnicos.
+---
 
-## Descripción
+## English
 
-SvanIA utiliza tecnologías avanzadas de inteligencia artificial para proporcionar asistencia técnica precisa y contextual. La aplicación integra:
+### Overview
 
-- **Azure OpenAI (GPT-4o-mini)** para generación de respuestas inteligentes
-- **LangChain** para mejorar el contexto y la búsqueda semántica
-- **Azure Cognitive Search** para búsqueda en manuales técnicos
-- **Azure AI Foundry** para análisis de imágenes
-- **Redis** para caché y persistencia de datos
+Technical Support AI Assistant is a FastAPI-based reference project for building a support assistant over technical manuals and product documentation.
 
-## Características Principales
+It combines:
 
-- 💬 **Chat Interactivo**: Interfaz de conversación natural y contextual
-- 🧠 **Contexto Mejorado**: LangChain mantiene mejor el hilo de las conversaciones
-- 🔍 **Búsqueda Vectorial**: Encuentra información semánticamente relevante en manuales técnicos
-- 📊 **Análisis de Imágenes**: Procesa imágenes para diagnóstico visual
-- 📱 **Diseño Responsivo**: Funciona en dispositivos móviles y de escritorio
-- 🔒 **Seguridad Optimizada**: Implementa HTTPS y políticas de seguridad
+- **Azure OpenAI / Azure AI Foundry** for response generation and multimodal reasoning
+- **Azure AI Search** for retrieval over indexed manuals
+- **Redis** for short-term memory and response caching
+- **Jinja2 + Tailwind CSS** for a lightweight web UI
 
-## Inicio Rápido
+This repository has been sanitized to be **generic and reusable**. It is no longer tied to any specific company or product catalog.
+
+### Current status
+
+This is a **reference implementation / MVP codebase**. It is useful for learning, experimentation, and as a starting point for enterprise support copilots, but it still needs hardening before a production-grade public release.
+
+### Key features
+
+- Chat-style technical support interface
+- Retrieval over manuals and structured support content
+- Optional image analysis / multimodal extensions
+- Redis-backed session and response caching
+- FastAPI backend with HTML frontend served from the same app
+- Microsoft-first deployment path
+
+### Tech stack
+
+- **Backend**: FastAPI, Jinja2, Python
+- **AI**: Azure OpenAI / Azure AI Foundry
+- **Search**: Azure AI Search
+- **Cache**: Redis
+- **Frontend styling**: Tailwind CSS
+- **Deployment**: Azure App Service or Azure Container Apps
+- **Recommended security/compliance add-ons**: Azure Key Vault, Application Insights, Microsoft Entra ID
+
+### Quick start
 
 ```bash
-# Clonar el repositorio
-git clone <url-del-repositorio>
-cd SvanIA
+git clone https://github.com/Nambu89/Asistente-IA-SAT.git
+cd Asistente-IA-SAT
 
-# Instalar dependencias
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+
 pip install -r requirements.txt
+npm install
 
-# Configurar variables de entorno
 cp .env.example .env
-# Editar .env con las credenciales necesarias
+# fill in your Azure + Redis values
 
-# Ejecutar la aplicación
 python run.py
 ```
 
-## Documentación
+Open:
 
-La documentación completa está disponible en el directorio [docs](./docs):
+`http://127.0.0.1:8000`
 
-- [Guía General](./docs/README.md)
-- [Arquitectura](./docs/arquitectura.md)
-- [Servicios](./docs/servicios.md)
-- [API](./docs/api.md)
-- [Configuración](./docs/configuracion.md)
-- [Despliegue](./docs/despliegue.md)
-- [Guía de Desarrollo](./docs/desarrollo.md)
-- [Resolución de Problemas](./docs/troubleshooting.md)
+### Environment variables
 
-## Requisitos
+Use `.env.example` as the reference template.
 
-- Python 3.8+
-- Redis
-- LangChain 0.3.25+
-- Acceso a servicios de Azure (OpenAI, Cognitive Search, AI Foundry)
-- Variables de entorno configuradas (ver archivo `.env.example`)
-- Modelo de embeddings para búsqueda vectorial (por defecto: text-embedding-ada-002)
+Main variables:
 
-## Despliegue
+- `AZURE_OPENAI_API_KEY`
+- `AZURE_OPENAI_ENDPOINT`
+- `AZURE_OPENAI_API_VERSION`
+- `AZURE_OPENAI_DEPLOYMENT_NAME`
+- `AZURE_SEARCH_ENDPOINT`
+- `AZURE_SEARCH_API_KEY`
+- `AZURE_SEARCH_INDEX_NAME`
+- `REDIS_HOST`
+- `REDIS_PASSWORD`
+- `REDIS_PORT`
 
-SvanIA está optimizado para desplegarse en Azure App Service. Consulte la [guía de despliegue](./docs/despliegue.md) para obtener instrucciones detalladas.
+### Recommended Microsoft deployment path
 
-## Seguridad
+#### Option A — Azure App Service
 
-La aplicación implementa diversas medidas de seguridad:
+Good for:
+- fast deployment
+- simple hosting
+- small/medium workloads
 
-- Forzado de HTTPS en producción
-- Configuración restrictiva de CORS
-- Middleware de hosts confiables
-- Manejo seguro de errores
+#### Option B — Azure Container Apps
 
-Consulte la [documentación de seguridad](./docs/configuracion.md#configuración-de-seguridad) para más detalles.
+Good for:
+- container-first deployments
+- more control over scaling
+- cleaner path to background jobs and future microservices
 
-## Contribuir
+### Recommended Microsoft production services
 
-Si desea contribuir al desarrollo de SvanIA, consulte la [guía de desarrollo](./docs/desarrollo.md) para obtener información sobre el entorno de desarrollo, estructura del proyecto y mejores prácticas.
+- **Azure AI Foundry / Azure OpenAI**
+- **Azure AI Search**
+- **Azure Cache for Redis**
+- **Azure Key Vault**
+- **Azure Monitor + Application Insights**
+- **Microsoft Entra ID** (optional authentication layer)
 
-## Licencia
+### Repository hygiene notes
 
-Propiedad de Fernando Prada. Todos los derechos reservados.
+Before making this repository public, you should still:
 
-## Contacto
+1. rotate any credentials that may have been committed in history
+2. purge git history if required
+3. remove any non-source artifacts still tracked locally
+4. add tests and CI
+5. validate all prompts and public-facing copy
 
-Para soporte o consultas, contacte con el equipo de desarrollo de SvanIA.
+### Open-source roadmap
+
+Suggested next steps:
+
+- migrate to the latest Azure OpenAI / Foundry calling pattern (`/openai/v1/`)
+- replace legacy prompt/config coupling with cleaner adapters
+- add tests for routes, retrieval, and caching
+- add GitHub Actions CI
+- optionally split backend services more clearly
+
+### License
+
+MIT
+
+---
+
+## Español
+
+### Descripción general
+
+Technical Support AI Assistant es un proyecto de referencia basado en FastAPI para construir un asistente de soporte técnico sobre manuales y documentación de producto.
+
+Combina:
+
+- **Azure OpenAI / Azure AI Foundry** para generación de respuestas y razonamiento multimodal
+- **Azure AI Search** para recuperación sobre manuales indexados
+- **Redis** para memoria de corto plazo y caché de respuestas
+- **Jinja2 + Tailwind CSS** para una interfaz web ligera
+
+Este repositorio ha sido saneado para que sea **genérico y reutilizable**. Ya no está ligado a una empresa ni a un catálogo concreto.
+
+### Estado actual
+
+Se trata de una **implementación de referencia / MVP**. Es útil para aprendizaje, experimentación y como punto de partida para copilotos de soporte enterprise, pero aún necesita endurecimiento antes de considerarse una release pública lista para producción.
+
+### Funcionalidades principales
+
+- Interfaz conversacional de soporte técnico
+- Recuperación sobre manuales y documentación estructurada
+- Extensión opcional a análisis de imágenes / multimodalidad
+- Caché de sesiones y respuestas con Redis
+- Backend FastAPI con frontend HTML servido desde la misma aplicación
+- Ruta de despliegue orientada a tecnologías Microsoft
+
+### Stack tecnológico
+
+- **Backend**: FastAPI, Jinja2, Python
+- **IA**: Azure OpenAI / Azure AI Foundry
+- **Búsqueda**: Azure AI Search
+- **Caché**: Redis
+- **Estilos frontend**: Tailwind CSS
+- **Despliegue**: Azure App Service o Azure Container Apps
+- **Servicios recomendados de seguridad/operación**: Azure Key Vault, Application Insights, Microsoft Entra ID
+
+### Inicio rápido
+
+```bash
+git clone https://github.com/Nambu89/Asistente-IA-SAT.git
+cd Asistente-IA-SAT
+
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+
+pip install -r requirements.txt
+npm install
+
+cp .env.example .env
+# rellena las variables de Azure + Redis
+
+python run.py
+```
+
+Abrir en navegador:
+
+`http://127.0.0.1:8000`
+
+### Variables de entorno
+
+Usa `.env.example` como plantilla de referencia.
+
+Variables principales:
+
+- `AZURE_OPENAI_API_KEY`
+- `AZURE_OPENAI_ENDPOINT`
+- `AZURE_OPENAI_API_VERSION`
+- `AZURE_OPENAI_DEPLOYMENT_NAME`
+- `AZURE_SEARCH_ENDPOINT`
+- `AZURE_SEARCH_API_KEY`
+- `AZURE_SEARCH_INDEX_NAME`
+- `REDIS_HOST`
+- `REDIS_PASSWORD`
+- `REDIS_PORT`
+
+### Ruta recomendada de despliegue en Microsoft
+
+#### Opción A — Azure App Service
+
+Buena para:
+- despliegue rápido
+- hosting sencillo
+- cargas pequeñas o medias
+
+#### Opción B — Azure Container Apps
+
+Buena para:
+- despliegues container-first
+- mayor control del escalado
+- evolución futura hacia jobs o microservicios
+
+### Servicios Microsoft recomendados para producción
+
+- **Azure AI Foundry / Azure OpenAI**
+- **Azure AI Search**
+- **Azure Cache for Redis**
+- **Azure Key Vault**
+- **Azure Monitor + Application Insights**
+- **Microsoft Entra ID** (opcional como capa de autenticación)
+
+### Notas de higiene del repositorio
+
+Antes de hacer este repositorio público conviene todavía:
+
+1. rotar cualquier credencial que haya podido quedar en el historial
+2. purgar el historial git si hace falta
+3. eliminar artefactos no fuente aún trackeados localmente
+4. añadir tests y CI
+5. revisar prompts y textos públicos
+
+### Hoja de ruta open-source
+
+Siguientes pasos recomendados:
+
+- migrar al patrón actual de Azure OpenAI / Foundry (`/openai/v1/`)
+- desacoplar prompts y configuración legacy
+- añadir tests de rutas, retrieval y caché
+- añadir GitHub Actions CI
+- opcionalmente separar mejor los servicios del backend
+
+### Licencia
+
+MIT

@@ -1,5 +1,5 @@
 """
-main.py - Punto de entrada principal de la aplicación SvanIA
+main.py - Punto de entrada principal de Technical Support AI Assistant
 
 Configura la aplicación FastAPI, middleware, y rutas.
 """
@@ -120,6 +120,28 @@ logger.info("Application Insights no está configurado y no se utilizará.")
 # Variables globales para servicios (singleton)
 settings = Settings()
 
+IS_PRODUCTION = os.getenv("PRODUCTION", "False").lower() == "true"
+
+
+def _parse_env_list(raw_value: str) -> list[str]:
+    return [item.strip() for item in raw_value.split(",") if item.strip()]
+
+
+def _get_allowed_hosts() -> list[str]:
+    default_hosts = ["localhost", "127.0.0.1", "*"] if not IS_PRODUCTION else ["*"]
+    configured_hosts = _parse_env_list(os.getenv("ALLOWED_HOSTS", ""))
+    return configured_hosts or default_hosts
+
+
+def _get_cors_origins() -> list[str]:
+    default_origins = [
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ] if not IS_PRODUCTION else []
+    configured_origins = _parse_env_list(os.getenv("CORS_ALLOW_ORIGINS", ""))
+    return configured_origins or default_origins
+
 # Funciones para inicialización y limpieza de recursos
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -188,11 +210,11 @@ async def periodic_health_check():
 
 # Inicializar FastAPI con documentación personalizada
 app = FastAPI(
-    title="SvanIA - Asistente técnico",
-    description="Asistente técnico especializado en productos del Grupo SVAN",
+    title="Technical Support AI Assistant",
+    description="Generic AI-powered technical support assistant built with FastAPI and Azure services",
     version="1.0.0",
-    docs_url="/api/docs" if not os.getenv("PRODUCTION", False) else None,
-    redoc_url="/api/redoc" if not os.getenv("PRODUCTION", False) else None,
+    docs_url="/api/docs" if not IS_PRODUCTION else None,
+    redoc_url="/api/redoc" if not IS_PRODUCTION else None,
     lifespan=lifespan  # Usar el gestor de contexto para lifecycle events
 )
 
@@ -227,30 +249,13 @@ app.add_middleware(HTTPSRedirectMiddleware)
 # Configurar middleware de seguridad
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=[
-        "localhost",
-        "127.0.0.1",
-        "svania.azurewebsites.net",
-        "b2b.gruposvan.com",
-        "*"  # Temporalmente para desarrollo
-    ] if not os.getenv("PRODUCTION", False) else [
-        "svania.azurewebsites.net",
-        "b2b.gruposvan.com"
-    ]
+    allowed_hosts=_get_allowed_hosts(),
 )
 
 # Configurar CORS (alineado con cors.json)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:8000",
-        "https://b2b.gruposvan.com",
-        "https://svania.azurewebsites.net"
-    ] if not os.getenv("PRODUCTION", False) else [
-        "https://b2b.gruposvan.com",
-        "https://svania.azurewebsites.net"
-    ],
+    allow_origins=_get_cors_origins(),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-CSRF-Token"],

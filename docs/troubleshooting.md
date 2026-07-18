@@ -1,6 +1,6 @@
-# Guía de Resolución de Problemas de SvanIA
+# Guía de Resolución de Problemas de Technical Support AI Assistant
 
-Este documento proporciona información para diagnosticar y resolver problemas comunes en la aplicación SvanIA.
+Este documento proporciona información para diagnosticar y resolver problemas comunes en la aplicación.
 
 ## Índice
 
@@ -209,7 +209,7 @@ Este documento proporciona información para diagnosticar y resolver problemas c
 
 ### Endpoints de Diagnóstico
 
-SvanIA proporciona varios endpoints para diagnóstico:
+La aplicación proporciona varios endpoints para diagnóstico:
 
 1. **GET /health**:
    - Verificar el estado general de la aplicación

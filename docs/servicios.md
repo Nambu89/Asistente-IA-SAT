@@ -1,6 +1,6 @@
-# Servicios de SvanIA
+# Servicios de Technical Support AI Assistant
 
-Este documento describe los principales servicios que componen la aplicación SvanIA, su funcionalidad y cómo interactúan entre sí.
+Este documento describe los principales servicios que componen la aplicación, su funcionalidad y cómo interactúan entre sí.
 
 ## Índice
 

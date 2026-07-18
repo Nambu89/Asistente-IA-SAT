@@ -124,7 +124,7 @@ async def chat_endpoint(request: Request = None, message: str = Form(None), atta
     try:
         # Respuesta inicial si no hay mensaje
         if not message:
-            return {"response": "¡Hola! Soy el Asistente Técnico de SVAN. ¿En qué puedo ayudarte hoy?"}
+            return {"response": "¡Hola! Soy el Asistente IA de Soporte Técnico. ¿En qué puedo ayudarte hoy?"}
             
         logger.info(f"Mensaje recibido: {message}")
         
@@ -169,7 +169,7 @@ async def chat_endpoint(request: Request = None, message: str = Form(None), atta
                 # Guardar este mensaje en el historial
                 session_data["messages"].append({"role": "user", "content": message})
                 
-                response = "Para poder ayudarte con ese problema técnico, necesito saber el modelo específico del producto. Los modelos comienzan con S (SVAN), W (WONDER), A (ASPES) o H (HYUNDAI)."
+                response = "Para poder ayudarte con ese problema técnico, necesito saber el modelo específico del producto. Si lo tienes a mano, comparte la referencia exacta que aparece en la etiqueta o en el manual."
                 
                 session_data["messages"].append({"role": "assistant", "content": response})
                 
@@ -185,7 +185,7 @@ async def chat_endpoint(request: Request = None, message: str = Form(None), atta
                 return json_response
             
             # Para conversaciones generales sin modelo
-            basic_response = "Por favor, indícame el modelo específico del producto sobre el que necesitas información. Los modelos comienzan con S (SVAN), W (WONDER), A (ASPES) o H (HYUNDAI)."
+            basic_response = "Por favor, indícame el modelo específico del producto sobre el que necesitas información. Si no lo conoces, comparte una foto de la etiqueta o la referencia que aparece en el manual."
             
             # Crear respuesta con cookie
             json_response = {"response": basic_response}

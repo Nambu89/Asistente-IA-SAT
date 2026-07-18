@@ -1,7 +1,7 @@
 {
-  "name": "svania",
+  "name": "technical-support-ai-assistant",
   "version": "1.0.0",
-  "description": "Asistente técnico especializado en productos del Grupo SVAN",
+  "description": "Generic AI-powered technical support assistant built on FastAPI and Azure services",
   "main": "tailwind.config.js",
   "directories": {
     "test": "tests"

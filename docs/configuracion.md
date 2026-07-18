@@ -1,6 +1,6 @@
-# Configuración de SvanIA
+# Configuración de Technical Support AI Assistant
 
-Este documento describe las opciones de configuración disponibles para la aplicación SvanIA, incluyendo variables de entorno, archivos de configuración y ajustes recomendados.
+Este documento describe las opciones de configuración disponibles para la aplicación, incluyendo variables de entorno, archivos de configuración y ajustes recomendados.
 
 ## Índice
 
@@ -14,7 +14,7 @@ Este documento describe las opciones de configuración disponibles para la aplic
 
 ## Variables de Entorno
 
-SvanIA utiliza variables de entorno para configurar su comportamiento. A continuación se detallan las principales variables y sus valores recomendados.
+La aplicación utiliza variables de entorno para configurar su comportamiento. A continuación se detallan las principales variables y sus valores recomendados.
 
 ### Configuración General
 
@@ -25,7 +25,8 @@ SvanIA utiliza variables de entorno para configurar su comportamiento. A continu
 | `PORT` | Puerto para el servidor web | `8000` | `8000` |
 | `WEBSITES_PORT` | Puerto para Azure App Service | - | `8000` |
 | `LOG_LEVEL` | Nivel de logging | `INFO` | `INFO` en producción, `DEBUG` en desarrollo |
-| `ALLOWED_HOSTS` | Hosts permitidos (separados por comas) | `*` | Lista específica en producción |
+| `ALLOWED_HOSTS` | Hosts permitidos (separados por comas) | `localhost,127.0.0.1` | Lista específica en producción |
+| `CORS_ALLOW_ORIGINS` | Orígenes CORS permitidos (separados por comas) | `http://localhost:3000,http://localhost:8000,http://127.0.0.1:8000` | Lista específica en producción |
 
 ### Azure OpenAI
 
@@ -84,7 +85,7 @@ SvanIA utiliza variables de entorno para configurar su comportamiento. A continu
 
 ## Archivo .env
 
-SvanIA utiliza un archivo `.env` para cargar variables de entorno. A continuación se muestra un ejemplo de archivo `.env`:
+La aplicación utiliza un archivo `.env` para cargar variables de entorno. A continuación se muestra un ejemplo de archivo `.env`:
 
 ```dotenv
 # Configuración General
@@ -92,7 +93,8 @@ DEBUG=False
 PRODUCTION=True
 PORT=8000
 LOG_LEVEL=INFO
-ALLOWED_HOSTS=svania.azurewebsites.net,b2b.gruposvan.com
+ALLOWED_HOSTS=localhost,127.0.0.1
+CORS_ALLOW_ORIGINS=http://localhost:3000,http://localhost:8000,http://127.0.0.1:8000
 
 # Azure OpenAI
 AZURE_OPENAI_API_KEY=your_api_key_here
@@ -205,7 +207,7 @@ La división de documentos en chunks es crucial para la búsqueda semántica. Re
 
 ### HTTPS
 
-SvanIA implementa un middleware para forzar HTTPS en producción:
+La aplicación implementa un middleware para forzar HTTPS en producción:
 
 ```python
 # Middleware para manejar X-Forwarded-Proto y forzar HTTPS
@@ -242,8 +244,7 @@ La configuración de CORS se realiza mediante middleware:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://b2b.gruposvan.com",
-        "https://svania.azurewebsites.net"
+        *[origin.strip() for origin in os.getenv("CORS_ALLOW_ORIGINS", "").split(",") if origin.strip()]
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -259,16 +260,13 @@ Se implementa el middleware TrustedHost para restringir los hosts permitidos:
 ```python
 app.add_middleware(
     TrustedHostMiddleware,
-    allowed_hosts=[
-        "svania.azurewebsites.net",
-        "b2b.gruposvan.com"
-    ]
+    allowed_hosts=[host.strip() for host in os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if host.strip()]
 )
 ```
 
 ## Configuración de Logging
 
-SvanIA implementa un sistema de logging detallado para facilitar el diagnóstico de problemas:
+La aplicación implementa un sistema de logging detallado para facilitar el diagnóstico de problemas:
 
 ```python
 # Configurar logging (simplificado para Azure)
@@ -303,7 +301,7 @@ logging.basicConfig(
 
 ### Caché
 
-SvanIA implementa estrategias de caché para mejorar el rendimiento:
+La aplicación implementa estrategias de caché para mejorar el rendimiento:
 
 - **Redis**: Caché distribuida para entornos de producción
 - **Memoria**: Caché en memoria como fallback

@@ -1,5 +1,5 @@
 """
-langchain_service.py - Servicio para integrar LangChain con SvanIA
+langchain_service.py - Servicio para integrar LangChain con el asistente técnico
 
 Este servicio proporciona funcionalidades avanzadas de procesamiento de lenguaje natural
 y gestión de contexto utilizando la biblioteca LangChain.
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 class LangChainService:
     """
-    Servicio para integrar LangChain con SvanIA.
+    Servicio para integrar LangChain con el asistente técnico.
     
     Este servicio proporciona funcionalidades avanzadas de procesamiento de lenguaje natural
     y gestión de contexto utilizando la biblioteca LangChain, manteniendo compatibilidad

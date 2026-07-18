@@ -1,6 +1,6 @@
-// Service Worker para SvanIA
+// Service Worker para Technical Support AI Assistant
 
-const CACHE_NAME = 'svania-cache-v1';
+const CACHE_NAME = 'technical-support-ai-assistant-cache-v1';
 const OFFLINE_URL = '/offline.html';
 
 // Recursos para almacenar en caché

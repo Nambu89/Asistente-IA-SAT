@@ -1,5 +1,3 @@
-"""
-svania - Asistente técnico especializado en productos del Grupo SWAN
-"""
+"""Technical Support AI Assistant application package."""
 
 __version__ = "1.0.0"

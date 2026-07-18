@@ -1,6 +1,6 @@
-# Guía de Despliegue de SvanIA
+# Guía de Despliegue de Technical Support AI Assistant
 
-Este documento describe los pasos para desplegar la aplicación SvanIA en diferentes entornos, con énfasis en Azure App Service.
+Este documento describe los pasos para desplegar la aplicación en diferentes entornos, con énfasis en Azure App Service.
 
 ## Índice
 
@@ -13,7 +13,7 @@ Este documento describe los pasos para desplegar la aplicación SvanIA en difere
 
 ## Requisitos Previos
 
-Antes de desplegar SvanIA, asegúrese de tener:
+Antes de desplegar la aplicación, asegúrese de tener:
 
 - Acceso a los servicios de Azure necesarios:
   - Azure OpenAI
@@ -27,12 +27,12 @@ Antes de desplegar SvanIA, asegúrese de tener:
 
 ## Despliegue Local
 
-Para desplegar SvanIA en un entorno local:
+Para desplegar la aplicación en un entorno local:
 
 1. Clone el repositorio:
    ```bash
    git clone <url-del-repositorio>
-   cd SvanIA
+   cd Asistente-IA-SAT
    ```
 
 2. Cree y active un entorno virtual:
@@ -60,7 +60,7 @@ Para desplegar SvanIA en un entorno local:
 
 ## Despliegue en Azure App Service
 
-SvanIA está optimizado para desplegarse en Azure App Service. Siga estos pasos:
+La aplicación está optimizada para desplegarse en Azure App Service. Siga estos pasos:
 
 ### Opción 1: Despliegue mediante Git
 
@@ -91,27 +91,27 @@ SvanIA está optimizado para desplegarse en Azure App Service. Siga estos pasos:
 
 2. Cree un grupo de recursos (si no existe):
    ```bash
-   az group create --name svania-resource-group --location westeurope
+    az group create --name support-ai-assistant-rg --location westeurope
    ```
 
 3. Cree un plan de App Service:
    ```bash
-   az appservice plan create --name svania-app-plan --resource-group svania-resource-group --sku B1 --is-linux
+    az appservice plan create --name support-ai-assistant-plan --resource-group support-ai-assistant-rg --sku B1 --is-linux
    ```
 
 4. Cree la App Service:
    ```bash
-   az webapp create --name svania --resource-group svania-resource-group --plan svania-app-plan --runtime "PYTHON|3.8"
+    az webapp create --name support-ai-assistant --resource-group support-ai-assistant-rg --plan support-ai-assistant-plan --runtime "PYTHON|3.8"
    ```
 
 5. Configure las variables de entorno:
    ```bash
-   az webapp config appsettings set --name svania --resource-group svania-resource-group --settings PRODUCTION=True WEBSITES_PORT=8000 ...
+    az webapp config appsettings set --name support-ai-assistant --resource-group support-ai-assistant-rg --settings PRODUCTION=True WEBSITES_PORT=8000 ...
    ```
 
 6. Despliegue el código:
    ```bash
-   az webapp deployment source config --name svania --resource-group svania-resource-group --repo-url <url-del-repositorio> --branch main --manual-integration
+    az webapp deployment source config --name support-ai-assistant --resource-group support-ai-assistant-rg --repo-url <url-del-repositorio> --branch main --manual-integration
    ```
 
 ### Configuración del Archivo .deployment
@@ -175,7 +175,7 @@ gunicorn -w 4 -k uvicorn.workers.UvicornWorker app.main:app --bind=0.0.0.0:$PORT
 
 ## Despliegue con Docker
 
-SvanIA incluye configuración para despliegue con Docker:
+El proyecto incluye configuración para despliegue con Docker:
 
 ### Dockerfile
 
@@ -208,7 +208,7 @@ CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "app.main:app
 version: '3'
 
 services:
-  svania:
+  support-ai-assistant:
     build: .
     ports:
       - "8000:8000"
@@ -238,7 +238,7 @@ services:
 
 ## Configuración Post-Despliegue
 
-Después de desplegar SvanIA, realice las siguientes configuraciones:
+Después de desplegar la aplicación, realice las siguientes configuraciones:
 
 ### Configuración de HTTPS
 
