@@ -2,6 +2,10 @@
 
 [English](#english) · [Español](#español)
 
+## Azure MVP Architecture
+
+![Azure MVP Architecture](docs/diagrams/azure-mvp-architecture.jpg)
+
 ---
 
 ## English
